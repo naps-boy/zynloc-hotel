@@ -24,3 +24,4 @@ Thumbs.db
 
 # Wrangler
 .wrangler/
+package-lock.json

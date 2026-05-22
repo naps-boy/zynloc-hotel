@@ -3,14 +3,12 @@ services:
     name: zynloc-hotel-api
     runtime: node
     plan: free
-    buildCommand: npm install --ignore-scripts
+    buildCommand: npm install --workspace apps/api
     startCommand: node apps/api/src/index.js
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 4000
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
