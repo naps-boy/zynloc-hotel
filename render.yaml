@@ -9,10 +9,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: NODE_TLS_REJECT_UNAUTHORIZED
-        value: "0"
       - key: DATABASE_URL
-        value: postgresql://postgres.phiphmckgxfrqvudnmxx:mehfuh%40popoJ1@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+        value: postgresql://zynloc_user:yloErfGS6xzka3BsO10WlY2RUjF7V0H1@dpg-d88dqgreo5us73fqkf9g-a/zynloc
       - key: JWT_SECRET
         value: M8MQfE7evxRrY1bANdQDLB-11GYl2tExw0Pa0LJhr-Pb-48_24w0_uWJq3onJXoM
       - key: CLIENT_URL

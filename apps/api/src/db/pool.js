@@ -24,10 +24,19 @@ function createPool() {
     return new adapter.Pool();
   }
 
-  return new pg.Pool({
-    connectionString: config.databaseUrl,
-    ssl: { rejectUnauthorized: false }
-  });
+  // Internal Render hostnames (e.g. dpg-xxx) have no dots — no SSL needed.
+  // External hosts (Supabase, etc.) need rejectUnauthorized:false to accept
+  // self-signed certs in the TLS chain.
+  let ssl;
+  try {
+    const u = new URL(config.databaseUrl);
+    const isInternal = !u.hostname.includes(".") || u.hostname === "localhost";
+    ssl = isInternal ? false : { rejectUnauthorized: false };
+  } catch {
+    ssl = { rejectUnauthorized: false };
+  }
+
+  return new pg.Pool({ connectionString: config.databaseUrl, ssl });
 }
 
 export const pool = createPool();
