@@ -1,0 +1,16 @@
+name = "zynloc-hotel-api"
+main = "src/worker.js"
+compatibility_date = "2026-05-21"
+compatibility_flags = ["nodejs_compat"]
+account_id = "255506fe40e991eadaf19ab2d90dd426"
+
+[vars]
+NODE_ENV = "production"
+CLIENT_URL = "https://zynloc-hotel.pages.dev"
+
+# Set secrets with:
+# wrangler secret put DATABASE_URL
+# wrangler secret put JWT_SECRET
+# wrangler secret put STRIPE_SECRET_KEY
+# wrangler secret put STRIPE_WEBHOOK_SECRET
+# wrangler secret put STRIPE_PRICE_ID
