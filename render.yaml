@@ -10,11 +10,11 @@ services:
       - key: NODE_ENV
         value: production
       - key: NODE_TLS_REJECT_UNAUTHORIZED
-        value: 0
+        value: "0"
       - key: DATABASE_URL
-        sync: false
+        value: postgresql://postgres.phiphmckgxfrqvudnmxx:mehfuh%40popoJ1@aws-0-us-east-1.pooler.supabase.com:6543/postgres
       - key: JWT_SECRET
-        sync: false
+        value: M8MQfE7evxRrY1bANdQDLB-11GYl2tExw0Pa0LJhr-Pb-48_24w0_uWJq3onJXoM
       - key: CLIENT_URL
         value: https://zynloc-hotel.pages.dev
       - key: MAIL_FROM
