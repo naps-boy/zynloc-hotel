@@ -26,7 +26,7 @@ function createPool() {
 
   return new pg.Pool({
     connectionString: config.databaseUrl,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false, checkServerIdentity: () => undefined }
   });
 }
 
