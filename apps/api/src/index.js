@@ -21,6 +21,7 @@ import { packagesRouter }        from "./routes/packages.js";
 import { navigationRouter }      from "./routes/navigation.js";
 import { serviceRequestsRouter } from "./routes/service-requests.js";
 import { accessLogRouter }       from "./routes/access-log.js";
+import { smtpRouter }            from "./routes/smtp.js";
 import { attachRealtime }        from "./services/realtime.js";
 import { startLateCheckoutMonitor } from "./jobs/lateCheckout.js";
 import { runMigrations }         from "./db/runMigrations.js";
@@ -60,33 +61,7 @@ app.use("/api/packages",         packagesRouter);
 app.use("/api/navigation",       navigationRouter);
 app.use("/api/service-requests", serviceRequestsRouter);
 app.use("/api/access-log",       accessLogRouter);
-
-// ── Test-email endpoint (GET /api/test-email?to=addr) ────────────────────────
-app.get("/api/test-email", async (req, res) => {
-  const to  = req.query.to || "test@example.com";
-  const key = cfg.resendApiKey;
-  console.log(`[test-email] RESEND_API_KEY present=${!!key} prefix=${key ? key.slice(0,8)+"…" : "none"}`);
-  if (!key) {
-    return res.json({ error: "RESEND_API_KEY not set", configuredFrom: cfg.mailFrom });
-  }
-  const payload = {
-    from: cfg.mailFrom,
-    to:   [to],
-    subject: "Zynloc test email",
-    html: "<p>Test email from Zynloc Hotel API. If you received this, Resend is working correctly.</p>",
-  };
-  console.log(`[test-email] Sending to=${to} from=${cfg.mailFrom}`);
-  const resp = await fetch("https://api.resend.com/emails", {
-    method:  "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body:    JSON.stringify(payload),
-  });
-  const bodyText = await resp.text();
-  let parsed;
-  try { parsed = JSON.parse(bodyText); } catch { parsed = bodyText; }
-  console.log(`[test-email] Resend responded ${resp.status}: ${bodyText}`);
-  res.json({ resendStatus: resp.status, resendBody: parsed, sentTo: to, sentFrom: cfg.mailFrom, apiKeyPrefix: key.slice(0,8)+"…" });
-});
+app.use("/api/smtp",             smtpRouter);
 
 app.use((error, _req, res, _next) => {
   const status  = error.status || 500;

@@ -1184,12 +1184,61 @@ function MgrSettings({ api, data, reload, show }) {
   const [connForm, setConnForm] = useState({ fromWaypointId: "", toWaypointId: "", distance: 1 });
   const [checkoutQr, setCheckoutQr] = useState(s.checkout_qr || null);
 
+  // ── SMTP state ──
+  const [smtpConfigs, setSmtpConfigs] = useState([]);
+  const [smtpForm, setSmtpForm] = useState({ label: "Default", senderName: "", email: "", smtpHost: "smtp.gmail.com", smtpPort: 587, smtpUser: "", smtpPass: "" });
+  const [smtpAdding, setSmtpAdding] = useState(false);
+  const [smtpTestTo, setSmtpTestTo] = useState("");
+  const [smtpTesting, setSmtpTesting] = useState(null);
+
   useEffect(() => { setForm({ name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "", coverPhotoUrl: s.cover_photo_url || "", receptionPhone: s.reception_phone || "" }); setCheckoutQr(s.checkout_qr || null); }, [data.settings]);
 
   useEffect(() => {
     api.request("/api/navigation/waypoints").then(setWaypoints).catch(() => {});
     api.request("/api/navigation/connections").then(setConnections).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (tab === "email") api.request("/api/smtp").then(setSmtpConfigs).catch(() => {});
+  }, [tab]);
+
+  async function addSmtp(e) {
+    e.preventDefault();
+    try {
+      const cfg = await api.request("/api/smtp", { method: "POST", body: JSON.stringify(smtpForm) });
+      setSmtpConfigs(c => [...c, cfg]);
+      setSmtpForm({ label: "Default", senderName: "", email: "", smtpHost: "smtp.gmail.com", smtpPort: 587, smtpUser: "", smtpPass: "" });
+      setSmtpAdding(false);
+      show("SMTP config saved", "success");
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function deleteSmtp(id) {
+    if (!confirm("Delete this SMTP config?")) return;
+    try {
+      await api.request(`/api/smtp/${id}`, { method: "DELETE" });
+      setSmtpConfigs(c => c.filter(x => x.id !== id));
+      show("Deleted", "success");
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function setDefaultSmtp(id) {
+    try {
+      await api.request(`/api/smtp/${id}/set-default`, { method: "POST" });
+      setSmtpConfigs(c => c.map(x => ({ ...x, is_default: x.id === id })));
+      show("Default updated", "success");
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function testSmtp(id) {
+    if (!smtpTestTo) { show("Enter a recipient email address", "error"); return; }
+    setSmtpTesting(id);
+    try {
+      await api.request(`/api/smtp/${id}/test`, { method: "POST", body: JSON.stringify({ to: smtpTestTo }) });
+      show(`Test email sent to ${smtpTestTo}`, "success");
+    } catch (err) { show(err.message, "error"); }
+    finally { setSmtpTesting(null); }
+  }
 
   async function saveBrand(e) {
     e.preventDefault();
@@ -1221,7 +1270,7 @@ function MgrSettings({ api, data, reload, show }) {
   return (
     <div className="settings-shell">
       <div className="settings-tabs">
-        {["brand","navigation","qr"].map(t => (
+        {["brand","email","navigation","qr"].map(t => (
           <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{cap(t)}</button>
         ))}
       </div>
@@ -1237,6 +1286,92 @@ function MgrSettings({ api, data, reload, show }) {
           {form.coverPhotoUrl && <img src={form.coverPhotoUrl} alt="" className="cover-preview" />}
           <button className="primary"><Check size={18} />Save</button>
         </form>
+      )}
+
+      {tab === "email" && (
+        <div className="stack">
+          <h2>Email configuration</h2>
+          <p className="muted">Configure your hotel's outgoing email so guests receive booking confirmations, receipts, and verification requests directly from your address.</p>
+
+          <div className="smtp-help-box">
+            <strong>Gmail setup guide</strong>
+            <ol>
+              <li>Enable 2-step verification on your Google account</li>
+              <li>Go to <em>Google Account → Security → App Passwords</em></li>
+              <li>Generate an app password for "Mail"</li>
+              <li>Use that 16-character password below (not your regular Gmail password)</li>
+              <li>SMTP host: <code>smtp.gmail.com</code> · Port: <code>587</code></li>
+            </ol>
+          </div>
+
+          {smtpConfigs.length > 0 && (
+            <div className="smtp-list">
+              {smtpConfigs.map(cfg => (
+                <div key={cfg.id} className={`smtp-card ${cfg.is_default ? "default" : ""}`}>
+                  <div className="smtp-card-header">
+                    <span className="smtp-label">{cfg.label}</span>
+                    {cfg.is_default && <span className="smtp-badge">Default</span>}
+                  </div>
+                  <div className="smtp-card-body">
+                    <span>{cfg.sender_name} &lt;{cfg.email}&gt;</span>
+                    <span className="muted">{cfg.smtp_host}:{cfg.smtp_port} · user: {cfg.smtp_user}</span>
+                  </div>
+                  <div className="smtp-card-actions">
+                    {!cfg.is_default && (
+                      <button className="ghost sm" onClick={() => setDefaultSmtp(cfg.id)}>Set default</button>
+                    )}
+                    <button className="ghost sm danger" onClick={() => deleteSmtp(cfg.id)}><X size={13} />Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {smtpConfigs.length > 0 && (
+            <div className="smtp-test-row">
+              <input
+                type="email"
+                placeholder="Send test email to…"
+                value={smtpTestTo}
+                onChange={e => setSmtpTestTo(e.target.value)}
+                className="smtp-test-input"
+              />
+              {smtpConfigs.filter(c => c.is_default).map(cfg => (
+                <button
+                  key={cfg.id}
+                  className="ghost sm"
+                  onClick={() => testSmtp(cfg.id)}
+                  disabled={smtpTesting === cfg.id}
+                >
+                  <Send size={13} />{smtpTesting === cfg.id ? "Sending…" : "Send test"}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {smtpConfigs.length < 4 && (
+            smtpAdding ? (
+              <form className="smtp-add-form panel" onSubmit={addSmtp}>
+                <h3>Add SMTP configuration</h3>
+                <div className="smtp-form-grid">
+                  <input required placeholder="Label (e.g. Main)" value={smtpForm.label} onChange={e => setSmtpForm({ ...smtpForm, label: e.target.value })} />
+                  <input required placeholder="Sender name (e.g. Grand Hotel)" value={smtpForm.senderName} onChange={e => setSmtpForm({ ...smtpForm, senderName: e.target.value })} />
+                  <input required type="email" placeholder="From email address" value={smtpForm.email} onChange={e => setSmtpForm({ ...smtpForm, email: e.target.value })} />
+                  <input required placeholder="SMTP host" value={smtpForm.smtpHost} onChange={e => setSmtpForm({ ...smtpForm, smtpHost: e.target.value })} />
+                  <input required type="number" placeholder="Port (587)" value={smtpForm.smtpPort} onChange={e => setSmtpForm({ ...smtpForm, smtpPort: +e.target.value })} />
+                  <input required placeholder="SMTP username" value={smtpForm.smtpUser} onChange={e => setSmtpForm({ ...smtpForm, smtpUser: e.target.value })} />
+                  <input required type="password" placeholder="App password" value={smtpForm.smtpPass} onChange={e => setSmtpForm({ ...smtpForm, smtpPass: e.target.value })} className="smtp-pass-input" />
+                </div>
+                <div className="row-btns">
+                  <button className="primary" type="submit"><Check size={16} />Save config</button>
+                  <button className="ghost" type="button" onClick={() => setSmtpAdding(false)}>Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <button className="ghost" onClick={() => setSmtpAdding(true)}><Plus size={16} />Add SMTP config</button>
+            )
+          )}
+        </div>
       )}
 
       {tab === "navigation" && (

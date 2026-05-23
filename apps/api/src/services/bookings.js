@@ -77,13 +77,8 @@ export async function createBookingFromDraft({ hotelId, draft }) {
   await rotateCheckinQr(booking.id);
 
   const hotel = (await query("SELECT * FROM hotels WHERE id = $1", [hotelId])).rows[0];
-  // Send confirmation to the hotel manager (onboarding@resend.dev only delivers to the
-  // Resend account owner while no custom domain is verified — use manager email as recipient)
-  const managerRow = (await query(
-    "SELECT email FROM staff WHERE hotel_id = $1 AND role = 'manager' ORDER BY created_at LIMIT 1",
-    [hotelId]
-  )).rows[0];
-  await sendBookingConfirmation({ guest: booking.guest, hotel, booking, qr, managerEmail: managerRow?.email });
+  // Send confirmation email to the guest using the hotel's configured SMTP
+  await sendBookingConfirmation({ guest: booking.guest, hotel, booking, qr, hotelId });
   emitHotel(hotelId, "bookings:changed", { ...booking, qr_token: qr.token, qr_data_url: qr.qr_data_url });
   return { ...booking, qr_token: qr.token, qr_data_url: qr.qr_data_url };
 }

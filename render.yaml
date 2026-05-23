@@ -15,7 +15,3 @@ services:
         value: M8MQfE7evxRrY1bANdQDLB-11GYl2tExw0Pa0LJhr-Pb-48_24w0_uWJq3onJXoM
       - key: CLIENT_URL
         value: https://zynloc-hotel.pages.dev
-      - key: MAIL_FROM
-        value: "Zynloc Hotel <onboarding@resend.dev>"
-      - key: RESEND_API_KEY
-        value: ""

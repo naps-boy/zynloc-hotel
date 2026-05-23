@@ -1,148 +1,243 @@
+import nodemailer from "nodemailer";
+import { query } from "../db/pool.js";
 import { config } from "../config.js";
 
-// ── Resend HTTP transport ──────────────────────────────────────────────────────
-// Docs: https://resend.com/docs/api-reference/emails/send-email
-// Set RESEND_API_KEY in Render env vars.
-// MAIL_FROM must be an address from a Resend-verified domain, OR use
-// "onboarding@resend.dev" (Resend's shared test sender — only delivers to
-// the email registered on your Resend account; fine for testing).
+// ── SMTP config lookup ────────────────────────────────────────────────────────
 
-async function send({ to, subject, html, attachments = [] }) {
-  const key = config.resendApiKey;
-  console.log(`[Email] send() called — to=${JSON.stringify(to)} subject="${subject}" apiKey=${key ? key.slice(0,8)+"…" : "NOT SET"}`);
+/**
+ * Fetch the default SMTP config for a hotel.
+ * Returns null if none has been configured yet.
+ */
+export async function getHotelSmtpConfig(hotelId) {
+  const { rows } = await query(
+    "SELECT * FROM smtp_configs WHERE hotel_id = $1 AND is_default = TRUE LIMIT 1",
+    [hotelId]
+  );
+  return rows[0] || null;
+}
 
-  if (!key) {
-    console.log(`[Email] RESEND_API_KEY is not set — skipping send`);
+/**
+ * Create a nodemailer transporter from an smtp_configs row.
+ */
+function createTransporter(cfg) {
+  return nodemailer.createTransport({
+    host: cfg.smtp_host,
+    port: cfg.smtp_port,
+    secure: cfg.smtp_port === 465,   // TLS on 465, STARTTLS on 587/25
+    auth: { user: cfg.smtp_user, pass: cfg.smtp_pass },
+    tls: { rejectUnauthorized: false },  // allow self-signed certs
+  });
+}
+
+/**
+ * Send a test email using a specific SMTP config row.
+ * Returns { ok, messageId, error }.
+ */
+export async function sendTestEmail(smtpCfg, toAddress) {
+  const transporter = createTransporter(smtpCfg);
+  try {
+    const info = await transporter.sendMail({
+      from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
+      to:      toAddress,
+      subject: "Zynloc Hotel — SMTP test",
+      html: `
+<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
+<div style="max-width:480px;margin:auto;background:#162235;border-radius:16px;padding:32px;text-align:center">
+  <h2 style="color:#d8a84f;margin:0 0 12px">SMTP connection verified</h2>
+  <p style="color:#9aa6b2;margin:0">Your email configuration is working correctly.<br>Zynloc Hotel will now send guest emails from this address.</p>
+  <p style="color:#9aa6b2;margin:24px 0 0;font-size:12px">Sent from: ${smtpCfg.email} via ${smtpCfg.smtp_host}:${smtpCfg.smtp_port}</p>
+</div></body></html>`,
+    });
+    console.log(`[Email] Test email sent — messageId=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (err) {
+    console.error("[Email] Test email failed:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Internal send helper ──────────────────────────────────────────────────────
+
+/**
+ * Send an email using the hotel's default SMTP config.
+ * Silently skips (logs warning) if no SMTP config is set.
+ */
+async function send({ hotelId, to, subject, html, attachments = [] }) {
+  const smtpCfg = await getHotelSmtpConfig(hotelId);
+  if (!smtpCfg) {
+    console.warn(`[Email] No SMTP config for hotel ${hotelId} — skipping "${subject}"`);
     return;
   }
 
-  const payload = {
-    from: config.mailFrom,
-    to: Array.isArray(to) ? to : [to],
+  const transporter = createTransporter(smtpCfg);
+  const mailOpts = {
+    from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
+    to:      Array.isArray(to) ? to.join(", ") : to,
     subject,
     html,
   };
 
   if (attachments.length) {
-    payload.attachments = attachments.map(a => ({
+    mailOpts.attachments = attachments.map(a => ({
       filename: a.filename,
-      content: a.content,   // base64 string
+      content:  Buffer.from(a.content, "base64"),
+      encoding: "base64",
     }));
-    console.log(`[Email] attaching ${attachments.length} file(s): ${attachments.map(a => a.filename).join(", ")}`);
   }
 
-  console.log(`[Email] POSTing to Resend — from="${payload.from}" to=${JSON.stringify(payload.to)}`);
-
-  let resp;
+  console.log(`[Email] Sending "${subject}" to ${mailOpts.to} via ${smtpCfg.smtp_host}:${smtpCfg.smtp_port}`);
   try {
-    resp = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (fetchErr) {
-    console.error(`[Email] fetch() threw:`, fetchErr);
-    return;
+    const info = await transporter.sendMail(mailOpts);
+    console.log(`[Email] Sent — messageId=${info.messageId}`);
+  } catch (err) {
+    // Log but don't crash the request — email failure must never block a booking
+    console.error(`[Email] Failed to send "${subject}":`, err.message);
   }
-
-  const bodyText = await resp.text();
-  console.log(`[Email] Resend response ${resp.status} ${resp.statusText}: ${bodyText}`);
-
-  if (!resp.ok) {
-    // Log but don't crash the request — email failure shouldn't block the booking
-    console.error(`[Email error] Resend rejected the request — status=${resp.status}`);
-    return;
-  }
-
-  let parsed;
-  try { parsed = JSON.parse(bodyText); } catch { parsed = {}; }
-  console.log(`[Email sent] id=${parsed.id}  to=${JSON.stringify(to)}  subject="${subject}"`);
 }
 
-// ─── Booking confirmation ─────────────────────────────────────────────────────
-// managerEmail: hotel manager's email address (used as `to` while onboarding@resend.dev
-// is active, since Resend's shared sender only delivers to the account owner's email).
-// Once a custom domain is verified on Resend, switch `to` back to guest.email.
-export async function sendBookingConfirmation({ guest, hotel, booking, qr, managerEmail }) {
+// ── Transactional emails ──────────────────────────────────────────────────────
+
+/**
+ * Booking confirmation — sent to the guest's email with their access QR attached.
+ * hotelId is used to look up the hotel's SMTP config.
+ */
+export async function sendBookingConfirmation({ guest, hotel, booking, qr, hotelId }) {
   const guestLink = `${config.clientUrl}/guest/${qr.token}`;
-  const recipient = managerEmail || guest.email;
   await send({
-    to: recipient,
-    subject: `New booking: ${guest.name} → ${hotel.name} (Room ${booking.room_number})`,
+    hotelId,
+    to: guest.email,
+    subject: `Your booking at ${hotel.name} — ${new Date(booking.check_in).toLocaleDateString()}`,
     html: `
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
 <div style="max-width:520px;margin:auto;background:#162235;border-radius:16px;padding:32px">
-  <h1 style="color:#d8a84f;margin:0 0 8px">New booking — ${hotel.name}</h1>
-  <p style="color:#9aa6b2;margin:0 0 24px;font-size:13px">Share the guest profile link below with your guest so they can complete check-in.</p>
 
-  <table style="width:100%;border-collapse:collapse;margin:0 0 24px">
-    <tr><td style="padding:8px 0;color:#9aa6b2">Guest</td><td style="color:#e2e8f0;font-weight:bold">${guest.name}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Guest email</td><td style="color:#e2e8f0">${guest.email}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Room</td><td style="color:#e2e8f0;font-weight:bold">${booking.room_number}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Check-in</td><td style="color:#e2e8f0">${new Date(booking.check_in).toLocaleString()}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Check-out</td><td style="color:#e2e8f0">${new Date(booking.check_out).toLocaleString()}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Amount</td><td style="color:#d8a84f;font-weight:bold">$${Number(booking.amount || 0).toFixed(2)}</td></tr>
-    ${booking.special_notes ? `<tr><td style="padding:8px 0;color:#9aa6b2">Notes</td><td style="color:#e2e8f0">${booking.special_notes}</td></tr>` : ""}
-  </table>
-
-  <div style="background:#0d1b2a;border-radius:12px;padding:20px;margin:0 0 24px;border:1px solid #243044">
-    <h2 style="color:#d8a84f;margin:0 0 8px;font-size:16px">Guest profile link</h2>
-    <p style="color:#9aa6b2;margin:0 0 16px;font-size:14px">Forward this link to ${guest.name} — it opens their guest app and lets them complete their profile before arrival.</p>
-    <a href="${guestLink}" style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:bold;text-decoration:none;font-size:16px">Open Guest App →</a>
+  <div style="text-align:center;margin:0 0 28px">
+    <div style="display:inline-block;background:#d8a84f;border-radius:12px;padding:12px 20px">
+      <span style="font-size:24px;font-weight:bold;color:#0d1b2a">${hotel.name}</span>
+    </div>
+    <h1 style="color:#e2e8f0;margin:16px 0 4px;font-size:22px">Booking confirmed</h1>
+    <p style="color:#9aa6b2;margin:0;font-size:14px">Your stay has been reserved</p>
   </div>
 
-  <p style="color:#9aa6b2;font-size:11px">Guest link: ${guestLink}</p>
-</div></body></html>
-    `,
-    attachments: [
-      {
-        filename: "zynloc-access-qr.png",
-        content: qr.qr_data_url.split(",")[1],
-      },
-    ],
+  <table style="width:100%;border-collapse:collapse;margin:0 0 28px;background:#0d1b2a;border-radius:12px;overflow:hidden">
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px;width:40%">Guest</td>
+      <td style="padding:12px 16px;color:#e2e8f0;font-weight:600">${guest.name}</td>
+    </tr>
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Room</td>
+      <td style="padding:12px 16px;color:#e2e8f0;font-weight:600">${booking.room_number}</td>
+    </tr>
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Check-in</td>
+      <td style="padding:12px 16px;color:#e2e8f0">${new Date(booking.check_in).toLocaleString()}</td>
+    </tr>
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Check-out</td>
+      <td style="padding:12px 16px;color:#e2e8f0">${new Date(booking.check_out).toLocaleString()}</td>
+    </tr>
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Amount</td>
+      <td style="padding:12px 16px;color:#d8a84f;font-weight:700">$${Number(booking.amount || 0).toFixed(2)}</td>
+    </tr>
+    ${booking.special_notes ? `<tr><td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Notes</td><td style="padding:12px 16px;color:#e2e8f0">${booking.special_notes}</td></tr>` : ""}
+  </table>
+
+  <div style="background:#0d1b2a;border-radius:12px;padding:24px;margin:0 0 24px;border:1px solid #243044;text-align:center">
+    <h2 style="color:#d8a84f;margin:0 0 8px;font-size:16px">Complete your profile</h2>
+    <p style="color:#9aa6b2;margin:0 0 20px;font-size:14px">
+      Tap the button below to open your guest app, upload your photo, and breeze through check-in.
+      Your access QR code is also attached to this email.
+    </p>
+    <a href="${guestLink}"
+       style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 32px;border-radius:8px;font-weight:700;text-decoration:none;font-size:15px">
+      Open Guest App →
+    </a>
+  </div>
+
+  <p style="color:#4a5568;font-size:11px;text-align:center;margin:0">
+    If the button doesn't work, copy this link: ${guestLink}
+  </p>
+
+</div></body></html>`,
+    attachments: qr.qr_data_url
+      ? [{ filename: "zynloc-access-qr.png", content: qr.qr_data_url.split(",")[1] }]
+      : [],
   });
 }
 
-// ─── Checkout receipt ─────────────────────────────────────────────────────────
+/**
+ * Checkout receipt — sent to the guest after checkout.
+ */
 export async function sendCheckoutReceipt({ guest, hotel, booking }) {
-  const nights = Math.max(1, Math.ceil((new Date(booking.check_out) - new Date(booking.check_in)) / 86400000));
+  const nights = Math.max(1, Math.ceil(
+    (new Date(booking.check_out) - new Date(booking.check_in)) / 86_400_000
+  ));
   await send({
+    hotelId: hotel.id,
     to: guest.email,
     subject: `Thank you for staying at ${hotel.name}`,
     html: `
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
 <div style="max-width:520px;margin:auto;background:#162235;border-radius:16px;padding:32px">
-  <h1 style="color:#d8a84f;margin:0 0 8px">Thank you, ${guest.name}</h1>
-  <p style="color:#9aa6b2;margin:0 0 24px">We hope you enjoyed your stay</p>
 
-  <table style="width:100%;border-collapse:collapse;margin:0 0 24px">
-    <tr><td style="padding:8px 0;color:#9aa6b2">Room</td><td style="color:#e2e8f0">${booking.room_number}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Nights</td><td style="color:#e2e8f0">${nights}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Check-in</td><td style="color:#e2e8f0">${new Date(booking.check_in).toLocaleString()}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Check-out</td><td style="color:#e2e8f0">${new Date(booking.check_out).toLocaleString()}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Amount</td><td style="color:#d8a84f;font-weight:bold">$${Number(booking.amount || 0).toFixed(2)}</td></tr>
+  <div style="text-align:center;margin:0 0 28px">
+    <h1 style="color:#d8a84f;margin:0 0 8px;font-size:26px">Thank you, ${guest.name}</h1>
+    <p style="color:#9aa6b2;margin:0;font-size:15px">We hope you enjoyed your stay at ${hotel.name}</p>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;margin:0 0 28px;background:#0d1b2a;border-radius:12px;overflow:hidden">
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px;width:40%">Room</td>
+      <td style="padding:12px 16px;color:#e2e8f0;font-weight:600">${booking.room_number}</td>
+    </tr>
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Nights</td>
+      <td style="padding:12px 16px;color:#e2e8f0">${nights}</td>
+    </tr>
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Check-in</td>
+      <td style="padding:12px 16px;color:#e2e8f0">${new Date(booking.check_in).toLocaleString()}</td>
+    </tr>
+    <tr style="border-bottom:1px solid #243044">
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Check-out</td>
+      <td style="padding:12px 16px;color:#e2e8f0">${new Date(booking.check_out).toLocaleString()}</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 16px;color:#9aa6b2;font-size:13px">Amount</td>
+      <td style="padding:12px 16px;color:#d8a84f;font-weight:700">$${Number(booking.amount || 0).toFixed(2)}</td>
+    </tr>
   </table>
-</div></body></html>
-    `,
+
+  <p style="color:#9aa6b2;text-align:center;font-size:13px;margin:0">
+    We look forward to welcoming you back.
+  </p>
+
+</div></body></html>`,
   });
 }
 
-// ─── Live verification request ────────────────────────────────────────────────
+/**
+ * Live verification request — sent to the guest when staff initiates identity check.
+ */
 export async function sendVerificationRequest({ guest, hotel }) {
   const link = `${config.clientUrl}/guest/${guest.access_token}`;
   await send({
+    hotelId: hotel.id,
     to: guest.email,
     subject: `${hotel.name} — identity verification needed`,
     html: `
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;padding:32px">
 <div style="max-width:480px;margin:auto;background:#162235;border-radius:16px;padding:32px;text-align:center">
-  <h2 style="color:#d8a84f">Identity verification</h2>
-  <p style="color:#9aa6b2">The reception team is ready to check you in. Please take a live selfie to verify your identity.</p>
-  <a href="${link}" style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:bold;text-decoration:none;margin-top:16px">Verify Now →</a>
-</div></body></html>
-    `,
+  <h2 style="color:#d8a84f;margin:0 0 12px">Identity verification</h2>
+  <p style="color:#9aa6b2;margin:0 0 20px">
+    The reception team is ready to check you in.<br>
+    Please take a live selfie to verify your identity.
+  </p>
+  <a href="${link}"
+     style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:700;text-decoration:none">
+    Verify Now →
+  </a>
+</div></body></html>`,
   });
 }
