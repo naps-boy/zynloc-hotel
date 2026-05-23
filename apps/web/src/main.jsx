@@ -144,173 +144,95 @@ function GridPage({ form, children }) {
 }
 
 // ── SelfieCapture ─────────────────────────────────────────────────────────────
-// Handles camera permission edge-cases on iOS Safari + Android Chrome:
-//  • Checks mediaDevices API availability before calling
-//  • Distinguishes NotAllowedError (denied) vs NotFoundError (no camera)
-//  • File-upload fallback when camera is unavailable or denied
-//  • Cleans up stream on unmount and after capture/retake
+// Uses ONLY a native file input — no getUserMedia, no webcam API.
+// <input type="file" accept="image/*" capture="user"> opens the front camera
+// directly on iOS and Android without any permission handling needed.
+// FileReader converts the picked file to a base64 data-URL immediately.
 
 function SelfieCapture({ onCapture, label = "Take selfie", hint = "" }) {
-  const videoRef  = useRef(null);
-  const canvasRef = useRef(null);
-  const streamRef = useRef(null);
-  const fileRef   = useRef(null);
-
-  const [phase, setPhase] = useState("idle"); // idle | requesting | streaming | done | error
-  const [errKind, setErrKind] = useState("");  // denied | noCam | other
+  const inputRef = useRef(null);
   const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  // Stop any live stream
-  function stopStream() {
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-  }
+  const INPUT_ID = "selfie-file-input";
 
-  // Clean up on unmount
-  useEffect(() => () => stopStream(), []);
-
-  async function startCamera() {
-    setPhase("requesting");
-    setErrKind("");
-
-    // Guard: old browsers / non-secure contexts (though Pages always uses HTTPS)
-    if (!navigator?.mediaDevices?.getUserMedia) {
-      setErrKind("noCam");
-      setPhase("error");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      // videoRef is conditionally rendered — wait a tick for it to mount
-      setTimeout(() => {
-        if (!videoRef.current) return;
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-        setPhase("streaming");
-      }, 50);
-    } catch (err) {
-      const name = err?.name || "";
-      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-        setErrKind("denied");
-      } else if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
-        setErrKind("noCam");
-      } else {
-        setErrKind("other");
-        console.warn("Camera error:", err);
-      }
-      setPhase("error");
-    }
-  }
-
-  function capture() {
-    const video  = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-    canvas.width  = video.videoWidth  || 640;
-    canvas.height = video.videoHeight || 480;
-    canvas.getContext("2d").drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-    stopStream();
-    setPreview(dataUrl);
-    setPhase("done");
-    onCapture(dataUrl);
-  }
-
-  function retake() {
-    stopStream();
-    setPreview(null);
-    setPhase("idle");
-    onCapture(null);
-  }
-
-  // File-upload fallback (also works as primary path when camera denied)
-  function handleFile(e) {
+  function handleChange(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setLoading(true);
     const reader = new FileReader();
-    reader.onload = ev => {
-      setPreview(ev.target.result);
-      setPhase("done");
-      onCapture(ev.target.result);
+
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      if (!dataUrl || typeof dataUrl !== "string") {
+        console.error("[SelfieCapture] FileReader returned empty result");
+        setLoading(false);
+        return;
+      }
+      console.log("[SelfieCapture] photo read OK, length=", dataUrl.length);
+      setPreview(dataUrl);   // show preview immediately
+      setLoading(false);
+      onCapture(dataUrl);    // persist to parent state immediately
     };
+
+    reader.onerror = (ev) => {
+      console.error("[SelfieCapture] FileReader error", ev);
+      setLoading(false);
+    };
+
     reader.readAsDataURL(file);
+  }
+
+  function handleRetake(e) {
+    e.preventDefault();
+    setPreview(null);
+    onCapture(null);
+    // Reset value so onChange fires again even if same file is selected
+    if (inputRef.current) inputRef.current.value = "";
+    // Re-open the picker — this is within a user gesture so it works on mobile
+    setTimeout(() => inputRef.current?.click(), 30);
   }
 
   return (
     <div className="selfie-capture">
-      {/* ── Idle: show camera button + optional hint ── */}
-      {phase === "idle" && (
+      {/* Single hidden input — always present so the label can target it */}
+      <input
+        ref={inputRef}
+        id={INPUT_ID}
+        type="file"
+        accept="image/*"
+        capture="user"
+        onChange={handleChange}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0, overflow: "hidden", pointerEvents: "none" }}
+      />
+
+      {/* ── Idle: label triggers the input (no JS onClick needed) ── */}
+      {!preview && !loading && (
         <div className="selfie-prompt">
-          <button className="primary" type="button" onClick={startCamera}>
-            <Camera size={18} />{label}
-          </button>
+          <label htmlFor={INPUT_ID} className="selfie-trigger-btn">
+            <Camera size={20} />
+            <span>{label}</span>
+          </label>
           {hint && <p className="muted selfie-hint">{hint}</p>}
-          <p className="muted selfie-hint">Your camera will be used to verify your identity at check-in.</p>
         </div>
       )}
 
-      {/* ── Requesting permission spinner ── */}
-      {phase === "requesting" && (
-        <p className="muted selfie-hint">Requesting camera access…</p>
+      {/* ── Reading file ── */}
+      {loading && (
+        <p className="muted selfie-hint">Saving photo…</p>
       )}
 
-      {/* ── Live video ── */}
-      {phase === "streaming" && (
-        <div className="selfie-frame">
-          <video ref={videoRef} autoPlay playsInline muted />
-          <button type="button" className="capture-btn" onClick={capture}>
-            <Camera size={22} />
-          </button>
-        </div>
-      )}
-
-      {/* ── Preview after capture/upload ── */}
-      {phase === "done" && preview && (
+      {/* ── Preview — stays visible until retake ── */}
+      {preview && !loading && (
         <div className="selfie-done">
           <img className="selfie-img" src={preview} alt="Your photo" />
-          <button type="button" className="ghost" onClick={retake}>Retake</button>
+          <p className="selfie-saved-msg">✓ Photo saved — tap Continue below</p>
+          <button type="button" className="ghost selfie-retake-btn" onClick={handleRetake}>
+            <Camera size={14} /> Retake
+          </button>
         </div>
       )}
-
-      {/* ── Error state with file-upload fallback ── */}
-      {phase === "error" && (
-        <div className="selfie-error">
-          {errKind === "denied" && (
-            <>
-              <p className="error">Camera access was denied.</p>
-              <p className="muted selfie-hint">
-                Tap the camera icon in your browser's address bar and choose <strong>Allow</strong>, then tap Try again.
-                On iOS: Settings → Safari → Camera → Allow.
-              </p>
-              <button className="secondary" type="button" onClick={startCamera}>
-                <Camera size={16} /> Try again
-              </button>
-            </>
-          )}
-          {(errKind === "noCam" || errKind === "other") && (
-            <p className="error">Camera not available on this device.</p>
-          )}
-          {/* File upload always available as fallback */}
-          <label className="secondary selfie-upload-label">
-            <Upload size={16} /> Upload a photo instead
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              capture="user"
-              onChange={handleFile}
-              style={{ display: "none" }}
-            />
-          </label>
-        </div>
-      )}
-
-      <canvas ref={canvasRef} style={{ display: "none" }} />
     </div>
   );
 }

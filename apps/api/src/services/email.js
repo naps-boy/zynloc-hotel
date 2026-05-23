@@ -8,8 +8,11 @@ import { config } from "../config.js";
 // the email registered on your Resend account; fine for testing).
 
 async function send({ to, subject, html, attachments = [] }) {
-  if (!config.resendApiKey) {
-    console.log(`[Email disabled — set RESEND_API_KEY] To: ${to}  Subject: ${subject}`);
+  const key = config.resendApiKey;
+  console.log(`[Email] send() called — to=${JSON.stringify(to)} subject="${subject}" apiKey=${key ? key.slice(0,8)+"…" : "NOT SET"}`);
+
+  if (!key) {
+    console.log(`[Email] RESEND_API_KEY is not set — skipping send`);
     return;
   }
 
@@ -25,26 +28,38 @@ async function send({ to, subject, html, attachments = [] }) {
       filename: a.filename,
       content: a.content,   // base64 string
     }));
+    console.log(`[Email] attaching ${attachments.length} file(s): ${attachments.map(a => a.filename).join(", ")}`);
   }
 
-  const resp = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.resendApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  console.log(`[Email] POSTing to Resend — from="${payload.from}" to=${JSON.stringify(payload.to)}`);
 
-  if (!resp.ok) {
-    const body = await resp.text();
-    // Log but don't crash the request — email failure shouldn't block the booking
-    console.error(`[Email error] ${resp.status} ${resp.statusText}: ${body}`);
+  let resp;
+  try {
+    resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (fetchErr) {
+    console.error(`[Email] fetch() threw:`, fetchErr);
     return;
   }
 
-  const { id } = await resp.json();
-  console.log(`[Email sent] id=${id}  to=${to}  subject="${subject}"`);
+  const bodyText = await resp.text();
+  console.log(`[Email] Resend response ${resp.status} ${resp.statusText}: ${bodyText}`);
+
+  if (!resp.ok) {
+    // Log but don't crash the request — email failure shouldn't block the booking
+    console.error(`[Email error] Resend rejected the request — status=${resp.status}`);
+    return;
+  }
+
+  let parsed;
+  try { parsed = JSON.parse(bodyText); } catch { parsed = {}; }
+  console.log(`[Email sent] id=${parsed.id}  to=${JSON.stringify(to)}  subject="${subject}"`);
 }
 
 // ─── Booking confirmation + profile completion link ───────────────────────────
