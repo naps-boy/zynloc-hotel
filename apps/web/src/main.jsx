@@ -239,6 +239,61 @@ function SelfieCapture({ onCapture, label = "Take selfie", hint = "" }) {
   );
 }
 
+// ── ImageUpload ───────────────────────────────────────────────────────────────
+// Drag-drop or click-to-upload image input.
+// Resizes to maxWidth using canvas, returns base64 JPEG via onChange(dataUrl).
+
+function ImageUpload({ value, onChange, label = "Upload image", maxWidth = 1200 }) {
+  const inputRef = useRef(null);
+  const [dragging, setDragging] = useState(false);
+
+  function processFile(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxWidth) { height = Math.round(height * maxWidth / width); width = maxWidth; }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        onChange(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function onDrop(e) { e.preventDefault(); setDragging(false); processFile(e.dataTransfer.files[0]); }
+  function onDragOver(e) { e.preventDefault(); setDragging(true); }
+
+  return (
+    <div
+      className={`img-upload ${dragging ? "dragging" : ""} ${value ? "has-img" : ""}`}
+      onDragOver={onDragOver} onDragLeave={() => setDragging(false)} onDrop={onDrop}
+      onClick={() => inputRef.current?.click()}
+      role="button" tabIndex={0}
+      onKeyDown={e => e.key === "Enter" && inputRef.current?.click()}
+    >
+      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }}
+        onChange={e => processFile(e.target.files[0])} />
+      {value ? (
+        <div className="img-upload-preview">
+          <img src={value} alt={label} />
+          <div className="img-upload-overlay"><Camera size={18} /><span>Change photo</span></div>
+        </div>
+      ) : (
+        <div className="img-upload-placeholder">
+          <Upload size={28} />
+          <span className="img-upload-label">{label}</span>
+          <span className="img-upload-hint">Click or drag &amp; drop · JPG / PNG / WEBP</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── QrScanner ─────────────────────────────────────────────────────────────────
 
 function QrScanner({ onScan, onClose }) {
@@ -422,10 +477,11 @@ function OnboardBrand({ api, onNext, show }) {
       <p className="muted">Shown in the guest app and confirmation emails.</p>
       <input required placeholder="Hotel name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
       <input placeholder="Address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-      <input placeholder="Logo URL" value={form.logoUrl} onChange={e => setForm({ ...form, logoUrl: e.target.value })} />
-      <input placeholder="Cover photo URL" value={form.coverPhotoUrl} onChange={e => setForm({ ...form, coverPhotoUrl: e.target.value })} />
       <input placeholder="Reception phone" value={form.receptionPhone} onChange={e => setForm({ ...form, receptionPhone: e.target.value })} />
-      {form.coverPhotoUrl && <img src={form.coverPhotoUrl} alt="Cover preview" className="cover-preview" />}
+      <label className="upload-field-label">Hotel logo</label>
+      <ImageUpload value={form.logoUrl} onChange={v => setForm({ ...form, logoUrl: v })} label="Upload logo" maxWidth={400} />
+      <label className="upload-field-label">Cover photo</label>
+      <ImageUpload value={form.coverPhotoUrl} onChange={v => setForm({ ...form, coverPhotoUrl: v })} label="Upload cover photo" maxWidth={1200} />
       <button className="primary" type="submit"><ChevronRight size={18} />Save and continue</button>
     </form>
   );
@@ -1280,10 +1336,11 @@ function MgrSettings({ api, data, reload, show }) {
           <h2>Hotel brand</h2>
           <input placeholder="Hotel name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <input placeholder="Address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-          <input placeholder="Logo URL" value={form.logoUrl} onChange={e => setForm({ ...form, logoUrl: e.target.value })} />
-          <input placeholder="Cover photo URL" value={form.coverPhotoUrl} onChange={e => setForm({ ...form, coverPhotoUrl: e.target.value })} />
           <input placeholder="Reception phone" value={form.receptionPhone} onChange={e => setForm({ ...form, receptionPhone: e.target.value })} />
-          {form.coverPhotoUrl && <img src={form.coverPhotoUrl} alt="" className="cover-preview" />}
+          <label className="upload-field-label">Hotel logo</label>
+          <ImageUpload value={form.logoUrl} onChange={v => setForm({ ...form, logoUrl: v })} label="Upload logo" maxWidth={400} />
+          <label className="upload-field-label">Cover photo</label>
+          <ImageUpload value={form.coverPhotoUrl} onChange={v => setForm({ ...form, coverPhotoUrl: v })} label="Upload cover photo" maxWidth={1200} />
           <button className="primary"><Check size={18} />Save</button>
         </form>
       )}
