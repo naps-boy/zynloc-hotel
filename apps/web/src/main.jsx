@@ -568,7 +568,13 @@ function OnboardQrCodes({ api, onComplete, show }) {
 // ── Manager Dashboard ─────────────────────────────────────────────────────────
 
 function ManagerDashboard({ api, initialSettings }) {
-  const [active, setActive] = useState("overview");
+  const [active, setActive] = useState(() => {
+    // restore last tab from hash on hard-reload
+    const hash = window.location.hash.replace("#", "");
+    const valid = ["overview","rooms","bookings","guests","facilities","packages",
+      "service-requests","access-log","messages","staff","analytics","settings"];
+    return valid.includes(hash) ? hash : "overview";
+  });
   const [me, setMe] = useState(null);
   const [data, setData] = useState({
     rooms: [], bookings: [], guests: [], facilities: [], packages: [],
@@ -592,6 +598,31 @@ function ManagerDashboard({ api, initialSettings }) {
     ["analytics", BarChart3, "Analytics"],
     ["settings", Settings, "Settings"],
   ];
+
+  const BOTTOM_NAV = [
+    ["overview", BarChart3, "Overview"],
+    ["rooms", BedDouble, "Rooms"],
+    ["bookings", CalendarDays, "Bookings"],
+    ["guests", Users, "Guests"],
+    ["messages", MessageSquare, "Messages"],
+  ];
+
+  // History-aware navigation — enables browser back/forward
+  function navigate(key) {
+    setActive(key);
+    window.history.pushState({ mgrTab: key }, "", `#${key}`);
+  }
+
+  // Sync browser back/forward with active tab
+  useEffect(() => {
+    window.history.replaceState({ mgrTab: active }, "", `#${active}`);
+    const onPop = e => {
+      const tab = e.state?.mgrTab || "overview";
+      setActive(tab);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   async function loadAll() {
     const settled = await Promise.allSettled([
@@ -643,7 +674,7 @@ function ManagerDashboard({ api, initialSettings }) {
         <div className="brand-lockup"><Hotel size={20} /><span>{me?.hotel_name || "Zynloc"}</span></div>
         <nav>
           {NAV.map(([key, Icon, label]) => (
-            <button key={key} className={active === key ? "active" : ""} onClick={() => setActive(key)}>
+            <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
               <Icon size={16} />{label}
             </button>
           ))}
@@ -695,6 +726,15 @@ function ManagerDashboard({ api, initialSettings }) {
           </aside>
         </section>
       </section>
+
+      {/* Mobile bottom navigation — visible on phones (≤600px via CSS) */}
+      <nav className="mgr-bottom-nav">
+        {BOTTOM_NAV.map(([key, Icon, label]) => (
+          <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
+            <Icon size={22} /><span>{label}</span>
+          </button>
+        ))}
+      </nav>
 
       <Modal open={!!verifyReq} onClose={() => setVerifyReq(null)}>
         {verifyReq && <VerificationPanel req={verifyReq} api={api} onDone={() => { setVerifyReq(null); loadAll(); }} show={show} />}
