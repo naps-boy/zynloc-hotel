@@ -26,6 +26,9 @@ function createTransporter(cfg) {
     secure: cfg.smtp_port === 465,   // TLS on 465, STARTTLS on 587/25
     auth: { user: cfg.smtp_user, pass: cfg.smtp_pass },
     tls: { rejectUnauthorized: false },  // allow self-signed certs
+    connectionTimeout: 10_000,   // 10 s to establish TCP connection
+    greetingTimeout:   5_000,    // 5 s for SMTP greeting
+    socketTimeout:     15_000,   // 15 s per socket operation
   });
 }
 
