@@ -9,7 +9,7 @@ import {
   Check, CheckCircle, ChevronRight, DoorOpen, Dumbbell, FileDown,
   Globe, Hotel, LogOut, Map, MessageSquare, Navigation, PhoneCall,
   Plus, QrCode, Send, Settings, ShieldCheck, Sparkles, Star, Truck,
-  Users, X, XCircle, Zap
+  Upload, Users, X, XCircle, Zap
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { t, LANGUAGES } from "./lib/i18n.js";
@@ -144,61 +144,172 @@ function GridPage({ form, children }) {
 }
 
 // ── SelfieCapture ─────────────────────────────────────────────────────────────
+// Handles camera permission edge-cases on iOS Safari + Android Chrome:
+//  • Checks mediaDevices API availability before calling
+//  • Distinguishes NotAllowedError (denied) vs NotFoundError (no camera)
+//  • File-upload fallback when camera is unavailable or denied
+//  • Cleans up stream on unmount and after capture/retake
 
 function SelfieCapture({ onCapture, label = "Take selfie", hint = "" }) {
-  const videoRef = useRef(null);
+  const videoRef  = useRef(null);
   const canvasRef = useRef(null);
-  const [streaming, setStreaming] = useState(false);
+  const streamRef = useRef(null);
+  const fileRef   = useRef(null);
+
+  const [phase, setPhase] = useState("idle"); // idle | requesting | streaming | done | error
+  const [errKind, setErrKind] = useState("");  // denied | noCam | other
   const [preview, setPreview] = useState(null);
 
-  async function start() {
+  // Stop any live stream
+  function stopStream() {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  }
+
+  // Clean up on unmount
+  useEffect(() => () => stopStream(), []);
+
+  async function startCamera() {
+    setPhase("requesting");
+    setErrKind("");
+
+    // Guard: old browsers / non-secure contexts (though Pages always uses HTTPS)
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      setErrKind("noCam");
+      setPhase("error");
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      setStreaming(true);
-    } catch {
-      alert("Camera access denied. Please allow camera in browser settings.");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      // videoRef is conditionally rendered — wait a tick for it to mount
+      setTimeout(() => {
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+        setPhase("streaming");
+      }, 50);
+    } catch (err) {
+      const name = err?.name || "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        setErrKind("denied");
+      } else if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
+        setErrKind("noCam");
+      } else {
+        setErrKind("other");
+        console.warn("Camera error:", err);
+      }
+      setPhase("error");
     }
   }
 
   function capture() {
+    const video  = videoRef.current;
     const canvas = canvasRef.current;
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    canvas.getContext("2d").drawImage(videoRef.current, 0, 0);
+    if (!video || !canvas) return;
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    canvas.getContext("2d").drawImage(video, 0, 0);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-    videoRef.current.srcObject?.getTracks().forEach(tr => tr.stop());
-    setStreaming(false);
+    stopStream();
     setPreview(dataUrl);
+    setPhase("done");
     onCapture(dataUrl);
   }
 
   function retake() {
+    stopStream();
     setPreview(null);
-    start();
+    setPhase("idle");
+    onCapture(null);
+  }
+
+  // File-upload fallback (also works as primary path when camera denied)
+  function handleFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      setPreview(ev.target.result);
+      setPhase("done");
+      onCapture(ev.target.result);
+    };
+    reader.readAsDataURL(file);
   }
 
   return (
     <div className="selfie-capture">
-      {!streaming && !preview && (
-        <>
-          <button className="primary" type="button" onClick={start}><Camera size={18} />{label}</button>
-          {hint && <p className="hint">{hint}</p>}
-        </>
-      )}
-      {streaming && (
-        <div className="selfie-frame">
-          <video ref={videoRef} autoPlay playsInline muted />
-          <button type="button" className="capture-btn" onClick={capture}><Camera size={22} /></button>
+      {/* ── Idle: show camera button + optional hint ── */}
+      {phase === "idle" && (
+        <div className="selfie-prompt">
+          <button className="primary" type="button" onClick={startCamera}>
+            <Camera size={18} />{label}
+          </button>
+          {hint && <p className="muted selfie-hint">{hint}</p>}
+          <p className="muted selfie-hint">Your camera will be used to verify your identity at check-in.</p>
         </div>
       )}
-      {preview && (
-        <div className="selfie-preview">
-          <img src={preview} alt="Selfie" />
+
+      {/* ── Requesting permission spinner ── */}
+      {phase === "requesting" && (
+        <p className="muted selfie-hint">Requesting camera access…</p>
+      )}
+
+      {/* ── Live video ── */}
+      {phase === "streaming" && (
+        <div className="selfie-frame">
+          <video ref={videoRef} autoPlay playsInline muted />
+          <button type="button" className="capture-btn" onClick={capture}>
+            <Camera size={22} />
+          </button>
+        </div>
+      )}
+
+      {/* ── Preview after capture/upload ── */}
+      {phase === "done" && preview && (
+        <div className="selfie-done">
+          <img className="selfie-img" src={preview} alt="Your photo" />
           <button type="button" className="ghost" onClick={retake}>Retake</button>
         </div>
       )}
+
+      {/* ── Error state with file-upload fallback ── */}
+      {phase === "error" && (
+        <div className="selfie-error">
+          {errKind === "denied" && (
+            <>
+              <p className="error">Camera access was denied.</p>
+              <p className="muted selfie-hint">
+                Tap the camera icon in your browser's address bar and choose <strong>Allow</strong>, then tap Try again.
+                On iOS: Settings → Safari → Camera → Allow.
+              </p>
+              <button className="secondary" type="button" onClick={startCamera}>
+                <Camera size={16} /> Try again
+              </button>
+            </>
+          )}
+          {(errKind === "noCam" || errKind === "other") && (
+            <p className="error">Camera not available on this device.</p>
+          )}
+          {/* File upload always available as fallback */}
+          <label className="secondary selfie-upload-label">
+            <Upload size={16} /> Upload a photo instead
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              onChange={handleFile}
+              style={{ display: "none" }}
+            />
+          </label>
+        </div>
+      )}
+
       <canvas ref={canvasRef} style={{ display: "none" }} />
     </div>
   );

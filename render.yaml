@@ -16,4 +16,6 @@ services:
       - key: CLIENT_URL
         value: https://zynloc-hotel.pages.dev
       - key: MAIL_FROM
-        value: "Zynloc Hotel <no-reply@zynloc.local>"
+        value: "Zynloc Hotel <onboarding@resend.dev>"
+      - key: RESEND_API_KEY
+        value: ""

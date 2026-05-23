@@ -1,23 +1,50 @@
-import nodemailer from "nodemailer";
 import { config } from "../config.js";
 
-function getTransport() {
-  if (!config.smtp.host) return null;
-  return nodemailer.createTransport({
-    host: config.smtp.host,
-    port: config.smtp.port,
-    secure: config.smtp.port === 465,
-    auth: config.smtp.user ? { user: config.smtp.user, pass: config.smtp.pass } : undefined
-  });
-}
+// ── Resend HTTP transport ──────────────────────────────────────────────────────
+// Docs: https://resend.com/docs/api-reference/emails/send-email
+// Set RESEND_API_KEY in Render env vars.
+// MAIL_FROM must be an address from a Resend-verified domain, OR use
+// "onboarding@resend.dev" (Resend's shared test sender — only delivers to
+// the email registered on your Resend account; fine for testing).
 
-async function send(options) {
-  const transport = getTransport();
-  if (!transport) {
-    console.log(`[Email disabled] To: ${options.to}  Subject: ${options.subject}`);
+async function send({ to, subject, html, attachments = [] }) {
+  if (!config.resendApiKey) {
+    console.log(`[Email disabled — set RESEND_API_KEY] To: ${to}  Subject: ${subject}`);
     return;
   }
-  await transport.sendMail({ from: config.mailFrom, ...options });
+
+  const payload = {
+    from: config.mailFrom,
+    to: Array.isArray(to) ? to : [to],
+    subject,
+    html,
+  };
+
+  if (attachments.length) {
+    payload.attachments = attachments.map(a => ({
+      filename: a.filename,
+      content: a.content,   // base64 string
+    }));
+  }
+
+  const resp = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.resendApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    // Log but don't crash the request — email failure shouldn't block the booking
+    console.error(`[Email error] ${resp.status} ${resp.statusText}: ${body}`);
+    return;
+  }
+
+  const { id } = await resp.json();
+  console.log(`[Email sent] id=${id}  to=${to}  subject="${subject}"`);
 }
 
 // ─── Booking confirmation + profile completion link ───────────────────────────
@@ -53,9 +80,8 @@ export async function sendBookingConfirmation({ guest, hotel, booking, qr }) {
       {
         filename: "zynloc-access-qr.png",
         content: qr.qr_data_url.split(",")[1],
-        encoding: "base64"
-      }
-    ]
+      },
+    ],
   });
 }
 
@@ -76,16 +102,14 @@ export async function sendCheckoutReceipt({ guest, hotel, booking }) {
     <tr><td style="padding:8px 0;color:#9aa6b2">Nights</td><td style="color:#e2e8f0">${nights}</td></tr>
     <tr><td style="padding:8px 0;color:#9aa6b2">Check-in</td><td style="color:#e2e8f0">${new Date(booking.check_in).toLocaleString()}</td></tr>
     <tr><td style="padding:8px 0;color:#9aa6b2">Check-out</td><td style="color:#e2e8f0">${new Date(booking.check_out).toLocaleString()}</td></tr>
-    <tr><td style="padding:8px 0;color:#9aa6b2">Amount</td><td style="color:#d8a84f;font-weight:bold">$${Number(booking.amount).toFixed(2)}</td></tr>
+    <tr><td style="padding:8px 0;color:#9aa6b2">Amount</td><td style="color:#d8a84f;font-weight:bold">$${Number(booking.amount || 0).toFixed(2)}</td></tr>
   </table>
-
-  <p style="color:#9aa6b2;font-size:13px">We would love to hear about your experience. <a href="mailto:${hotel.reception_phone ? "" : "reviews@zynloc.com"}" style="color:#d8a84f">Leave a review</a></p>
 </div></body></html>
-    `
+    `,
   });
 }
 
-// ─── Live verification request (push via email fallback) ─────────────────────
+// ─── Live verification request ────────────────────────────────────────────────
 export async function sendVerificationRequest({ guest, hotel }) {
   const link = `${config.clientUrl}/guest/${guest.access_token}`;
   await send({
@@ -98,6 +122,6 @@ export async function sendVerificationRequest({ guest, hotel }) {
   <p style="color:#9aa6b2">The reception team is ready to check you in. Please take a live selfie to verify your identity.</p>
   <a href="${link}" style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:bold;text-decoration:none;margin-top:16px">Verify Now →</a>
 </div></body></html>
-    `
+    `,
   });
 }

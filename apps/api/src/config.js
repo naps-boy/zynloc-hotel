@@ -15,13 +15,8 @@ export const config = {
   stripeSecretKey: process.env.STRIPE_SECRET_KEY || "",
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
   stripePriceId: process.env.STRIPE_PRICE_ID || "",
-  mailFrom: process.env.MAIL_FROM || "Zynloc Hotel <no-reply@zynloc.local>",
-  smtp: {
-    host: process.env.SMTP_HOST || "",
-    port: Number(process.env.SMTP_PORT || 587),
-    user: process.env.SMTP_USER || "",
-    pass: process.env.SMTP_PASS || ""
-  }
+  mailFrom: process.env.MAIL_FROM || "Zynloc Hotel <onboarding@resend.dev>",
+  resendApiKey: process.env.RESEND_API_KEY || "",
 };
 
 export function requireEnv() {
