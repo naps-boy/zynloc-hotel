@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { query } from "../db/pool.js";
 import { getQrPayload, rotateCheckinQr } from "../services/qr.js";
-import { emitHotel } from "../services/realtime.js";
+import { emitHotel, emitBooking } from "../services/realtime.js";
 import { sendCheckoutReceipt, sendVerificationRequest } from "../services/email.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
 
@@ -117,14 +117,18 @@ guestRouter.get("/:token/checkin-qr", requireValidQr, asyncHandler(async (req, r
   res.json({ token: booking.checkin_token, expires_at: booking.checkin_token_expires_at, qr_data_url: qrDataUrl });
 }));
 
-// ─── POST /:token/request-verification — notify hotel to request live selfie ──
+// ─── POST /:token/request-verification — staff triggers live selfie verification ──
+// Emits to the hotel room (so all staff see it) AND to the guest's booking room
+// so the guest's browser opens the live selfie modal.
 guestRouter.post("/:token/request-verification", requireValidQr, asyncHandler(async (req, res) => {
-  emitHotel(req.qr.hotel_id, "verification:requested", {
-    bookingId: req.qr.booking_id,
-    guestId: req.qr.guest_id,
-    guestName: req.qr.guest_name,
+  const payload = {
+    bookingId:  req.qr.booking_id,
+    guestId:    req.qr.guest_id,
+    guestName:  req.qr.guest_name,
     roomNumber: req.qr.room_number
-  });
+  };
+  emitHotel(req.qr.hotel_id, "verification:requested", payload);
+  emitBooking(req.qr.booking_id, "verification:requested", payload);
   res.json({ ok: true });
 }));
 

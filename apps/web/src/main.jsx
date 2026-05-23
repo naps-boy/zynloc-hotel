@@ -30,6 +30,8 @@ function useApi() {
     const res = await fetch(`${API}${path}`, { ...opts, headers: hdrs(opts.headers || {}) });
     if (!res.ok) {
       const b = await res.json().catch(() => ({}));
+      // Auto-clear stale JWT so the login page is shown immediately
+      if (res.status === 401) { localStorage.removeItem("zynloc_token"); setToken(""); }
       throw new Error(b.error || `HTTP ${res.status}`);
     }
     if (res.status === 204) return null;
@@ -692,7 +694,8 @@ function ManagerDashboard({ api, initialSettings }) {
     socket.emit("hotel:join", me.hotel_id);
     ["rooms:changed","bookings:changed","messages:new","notifications:new"].forEach(ev => socket.on(ev, loadAll));
     socket.on("access:denied", ev => show(`Access denied: ${ev.guestName} at ${ev.facilityName}`, "warning"));
-    socket.on("verification:requested", ev => { setVerifyReq(ev); show(`Verification: ${ev.guestName}`, "info"); });
+    // verification:result is emitted by backend after the guest submits their live selfie comparison
+    socket.on("verification:result", ev => { setVerifyReq(ev); show(`Verification: ${ev.guestName} — ${ev.verified ? "✓ Verified" : "✗ Failed"}`, ev.verified ? "success" : "warning"); });
     return () => socket.disconnect();
   }, [me?.hotel_id]);
 
@@ -770,7 +773,7 @@ function ManagerDashboard({ api, initialSettings }) {
       </nav>
 
       <Modal open={!!verifyReq} onClose={() => setVerifyReq(null)}>
-        {verifyReq && <VerificationPanel req={verifyReq} api={api} onDone={() => { setVerifyReq(null); loadAll(); }} show={show} />}
+        {verifyReq && <VerificationPanel req={verifyReq} onDone={() => { setVerifyReq(null); loadAll(); }} />}
       </Modal>
 
       <Toast toast={toast} />
@@ -1287,38 +1290,23 @@ function MgrSettings({ api, data, reload, show }) {
   );
 }
 
-function VerificationPanel({ req, api, onDone, show }) {
-  const [result, setResult] = useState(null);
-
-  async function compare() {
-    if (!req.storedDescriptor || !req.liveDescriptor) { show("Descriptor missing", "error"); return; }
-    const cmp = compareDescriptors(req.storedDescriptor, req.liveDescriptor);
-    setResult(cmp);
-    try {
-      await api.request(`/api/guest/${req.guestToken}/live-verify`, {
-        method: "POST",
-        body: JSON.stringify({ verified: cmp.verified, distance: cmp.distance })
-      });
-    } catch {}
-  }
-
+function VerificationPanel({ req, onDone }) {
+  // req is the verification:result payload from the guest's live selfie comparison:
+  // { guestName, roomNumber, storedSelfie, liveSelfieUrl, matchScore, verified }
   return (
     <div className="stack">
       <h2>Live Identity Verification</h2>
       <p>Guest: <strong>{req.guestName}</strong> · Room <strong>{req.roomNumber}</strong></p>
       <div className="verify-faces">
-        {req.storedSelfie && <div><p className="muted">Profile photo</p><img src={req.storedSelfie} alt="Profile" /></div>}
-        {req.liveSelfie && <div><p className="muted">Live selfie</p><img src={req.liveSelfie} alt="Live" /></div>}
+        {req.storedSelfie && <div><p className="muted">Profile photo</p><img className="selfie-img" src={req.storedSelfie} alt="Profile" /></div>}
+        {req.liveSelfieUrl && <div><p className="muted">Live selfie</p><img className="selfie-img" src={req.liveSelfieUrl} alt="Live" /></div>}
       </div>
-      {!result && <button className="primary" onClick={compare}><ShieldCheck size={18} />Compare faces</button>}
-      {result && (
-        <div className={`verify-result ${result.verified ? "verified" : "failed"}`}>
-          {result.verified ? <CheckCircle size={32} /> : <XCircle size={32} />}
-          <strong>{result.verified ? "Identity Verified" : "Verification Failed"}</strong>
-          <p>Distance: {result.distance} (threshold: 0.6)</p>
-          <button className="primary" onClick={onDone}>Done</button>
-        </div>
-      )}
+      <div className={`verify-result ${req.verified ? "verified" : "failed"}`}>
+        {req.verified ? <CheckCircle size={32} /> : <XCircle size={32} />}
+        <strong>{req.verified ? "Identity Verified ✓" : "Verification Failed ✗"}</strong>
+        <p className="muted">Similarity score: {Number(req.matchScore || 1).toFixed(3)} (threshold: 0.6)</p>
+      </div>
+      <button className="primary" onClick={onDone}>Done</button>
     </div>
   );
 }
@@ -1327,6 +1315,7 @@ function VerificationPanel({ req, api, onDone, show }) {
 
 function GuestApp({ token }) {
   const [payload, setPayload] = useState(null);
+  const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState("home");
   const [lang, setLang] = useState("English");
   const [verifyModal, setVerifyModal] = useState(false);
@@ -1343,7 +1332,12 @@ function GuestApp({ token }) {
     return res.json();
   }
 
-  function reload() { gReq("").then(setPayload).catch(e => show(e.message, "error")); }
+  function reload() {
+    gReq("").then(d => { setPayload(d); setLoadError(""); }).catch(e => {
+      setLoadError(e.message);
+      show(e.message, "error");
+    });
+  }
 
   useEffect(() => { reload(); }, [token]);
 
@@ -1352,11 +1346,26 @@ function GuestApp({ token }) {
     const socket = io(API);
     socket.emit("guest:join", payload.booking.id);
     socket.on("messages:new", reload);
+    // verification:requested is emitted directly to this booking room by the backend
     socket.on("verification:requested", () => setVerifyModal(true));
     return () => socket.disconnect();
   }, [payload?.booking?.id]);
 
-  if (!payload) return <main className="guest-shell loading"><p>{toast?.msg || "Loading…"}</p><Toast toast={toast} /></main>;
+  if (!payload) {
+    return (
+      <main className="guest-shell" style={{ alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+        {loadError
+          ? <div className="stack" style={{ textAlign: "center", padding: 32 }}>
+              <p className="error" style={{ fontSize: 16 }}>{loadError}</p>
+              {loadError.includes("ended") && <p className="muted">Your stay has ended. Thank you for visiting!</p>}
+              {loadError.includes("not found") && <p className="muted">This link is invalid. Please check your booking confirmation email.</p>}
+            </div>
+          : <p className="muted">Loading…</p>
+        }
+        <Toast toast={toast} />
+      </main>
+    );
+  }
 
   const { booking, facilities = [], waypoints = [], connections = [], messages = [] } = payload;
 
@@ -1394,7 +1403,7 @@ function GuestApp({ token }) {
       </nav>
 
       {verifyModal && (
-        <LiveVerify token={token} gReq={gReq} show={show} lang={lang} onDone={() => setVerifyModal(false)} />
+        <LiveVerify token={token} gReq={gReq} booking={booking} show={show} lang={lang} onDone={() => setVerifyModal(false)} />
       )}
 
       <Toast toast={toast} />
@@ -1725,7 +1734,7 @@ function GuestCheckout({ booking, gReq, show, lang }) {
   );
 }
 
-function LiveVerify({ token, gReq, show, lang, onDone }) {
+function LiveVerify({ token, gReq, booking, show, lang, onDone }) {
   const [selfie, setSelfie] = useState(null);
   const [processing, setProcessing] = useState(false);
 
@@ -1734,10 +1743,28 @@ function LiveVerify({ token, gReq, show, lang, onDone }) {
     setProcessing(true);
     try {
       await loadFaceModels();
-      const descriptor = await extractDescriptorFromDataUrl(selfie);
-      if (!descriptor) { show("No face detected", "error"); setProcessing(false); return; }
-      await gReq("/live-verify", { method: "POST", body: { selfieDataUrl: selfie, faceDescriptor: Array.from(descriptor) } });
-      show(t(lang, "verificationSent"), "success");
+      const liveDescriptor = await extractDescriptorFromDataUrl(selfie);
+      if (!liveDescriptor) { show("No face detected", "error"); setProcessing(false); return; }
+
+      // Compare live selfie with stored profile photo
+      let matchScore = 1.0; // 1.0 = no match (max distance)
+      let verified = false;
+      if (booking?.selfie_url) {
+        try {
+          const storedDescriptor = await extractDescriptorFromDataUrl(booking.selfie_url);
+          if (storedDescriptor) {
+            const cmp = compareDescriptors(storedDescriptor, liveDescriptor);
+            matchScore = cmp.distance;
+            verified = cmp.verified;
+          }
+        } catch { /* face comparison optional — still send the live selfie */ }
+      }
+
+      await gReq("/live-verify", {
+        method: "POST",
+        body: { liveSelfieUrl: selfie, matchScore, verified }
+      });
+      show(verified ? "Identity verified ✓" : t(lang, "verificationSent"), verified ? "success" : "info");
       onDone();
     } catch (err) { show(err.message, "error"); setProcessing(false); }
   }
