@@ -62,33 +62,39 @@ async function send({ to, subject, html, attachments = [] }) {
   console.log(`[Email sent] id=${parsed.id}  to=${JSON.stringify(to)}  subject="${subject}"`);
 }
 
-// ─── Booking confirmation + profile completion link ───────────────────────────
-export async function sendBookingConfirmation({ guest, hotel, booking, qr }) {
+// ─── Booking confirmation ─────────────────────────────────────────────────────
+// managerEmail: hotel manager's email address (used as `to` while onboarding@resend.dev
+// is active, since Resend's shared sender only delivers to the account owner's email).
+// Once a custom domain is verified on Resend, switch `to` back to guest.email.
+export async function sendBookingConfirmation({ guest, hotel, booking, qr, managerEmail }) {
   const guestLink = `${config.clientUrl}/guest/${qr.token}`;
+  const recipient = managerEmail || guest.email;
   await send({
-    to: guest.email,
-    subject: `Your booking at ${hotel.name} is confirmed`,
+    to: recipient,
+    subject: `New booking: ${guest.name} → ${hotel.name} (Room ${booking.room_number})`,
     html: `
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
 <div style="max-width:520px;margin:auto;background:#162235;border-radius:16px;padding:32px">
-  <h1 style="color:#d8a84f;margin:0 0 8px">Welcome to ${hotel.name}</h1>
-  <p style="color:#9aa6b2;margin:0 0 24px">Your stay is confirmed</p>
+  <h1 style="color:#d8a84f;margin:0 0 8px">New booking — ${hotel.name}</h1>
+  <p style="color:#9aa6b2;margin:0 0 24px;font-size:13px">Share the guest profile link below with your guest so they can complete check-in.</p>
 
   <table style="width:100%;border-collapse:collapse;margin:0 0 24px">
     <tr><td style="padding:8px 0;color:#9aa6b2">Guest</td><td style="color:#e2e8f0;font-weight:bold">${guest.name}</td></tr>
+    <tr><td style="padding:8px 0;color:#9aa6b2">Guest email</td><td style="color:#e2e8f0">${guest.email}</td></tr>
     <tr><td style="padding:8px 0;color:#9aa6b2">Room</td><td style="color:#e2e8f0;font-weight:bold">${booking.room_number}</td></tr>
     <tr><td style="padding:8px 0;color:#9aa6b2">Check-in</td><td style="color:#e2e8f0">${new Date(booking.check_in).toLocaleString()}</td></tr>
     <tr><td style="padding:8px 0;color:#9aa6b2">Check-out</td><td style="color:#e2e8f0">${new Date(booking.check_out).toLocaleString()}</td></tr>
+    <tr><td style="padding:8px 0;color:#9aa6b2">Amount</td><td style="color:#d8a84f;font-weight:bold">$${Number(booking.amount || 0).toFixed(2)}</td></tr>
     ${booking.special_notes ? `<tr><td style="padding:8px 0;color:#9aa6b2">Notes</td><td style="color:#e2e8f0">${booking.special_notes}</td></tr>` : ""}
   </table>
 
   <div style="background:#0d1b2a;border-radius:12px;padding:20px;margin:0 0 24px;border:1px solid #243044">
-    <h2 style="color:#d8a84f;margin:0 0 8px;font-size:16px">Action required before arrival</h2>
-    <p style="color:#9aa6b2;margin:0 0 16px;font-size:14px">Please complete your guest profile so we can prepare for your arrival. This takes 2 minutes.</p>
-    <a href="${guestLink}" style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:bold;text-decoration:none;font-size:16px">Complete My Profile →</a>
+    <h2 style="color:#d8a84f;margin:0 0 8px;font-size:16px">Guest profile link</h2>
+    <p style="color:#9aa6b2;margin:0 0 16px;font-size:14px">Forward this link to ${guest.name} — it opens their guest app and lets them complete their profile before arrival.</p>
+    <a href="${guestLink}" style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:bold;text-decoration:none;font-size:16px">Open Guest App →</a>
   </div>
 
-  <p style="color:#9aa6b2;font-size:12px">Keep this link — it is your access key for the entire stay. Reception: ${hotel.reception_phone || "See hotel website"}</p>
+  <p style="color:#9aa6b2;font-size:11px">Guest link: ${guestLink}</p>
 </div></body></html>
     `,
     attachments: [

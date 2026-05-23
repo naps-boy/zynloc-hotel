@@ -69,7 +69,8 @@ bookingsRouter.post("/:id/resend-email", asyncHandler(async (req, res) => {
     guest: { name: b.guest_name, email: b.guest_email },
     hotel,
     booking: b,
-    qr: { token: b.qr_token, qr_data_url: b.qr_data_url }
+    qr: { token: b.qr_token, qr_data_url: b.qr_data_url },
+    managerEmail: req.user.email,
   });
   res.json({ ok: true });
 }));

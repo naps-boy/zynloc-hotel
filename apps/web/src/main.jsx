@@ -1422,7 +1422,7 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
       const res = await fetch(`${API}/api/guest/${token}/profile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, selfieDataUrl: selfie, faceDescriptor: Array.from(descriptor) })
+        body: JSON.stringify({ name, selfieUrl: selfie, faceDescriptor: Array.from(descriptor) })
       });
       if (!res.ok) throw new Error((await res.json()).error);
       onComplete();
