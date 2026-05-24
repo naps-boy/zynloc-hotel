@@ -8,21 +8,31 @@ import { asyncHandler, HttpError } from "../utils/http.js";
 export const smtpRouter = Router();
 smtpRouter.use(requireAuth);
 
-// Provider-aware schema — brevo/gmail only need email + smtp_pass (API key / App Password)
-const smtpSchema = z.object({
-  provider:   z.enum(["brevo", "gmail", "custom"]).default("brevo"),
-  label:      z.string().min(1).max(100).default("Default"),
-  senderName: z.string().min(1).max(255),
-  email:      z.string().email(),
-  smtpPass:   z.string().min(1),
-  // SMTP-only — required when provider === 'custom'
+// Base fields (all optional so PUT can send partial updates)
+const smtpBaseSchema = z.object({
+  provider:   z.enum(["brevo", "gmail", "custom"]).optional(),
+  label:      z.string().min(1).max(100).optional(),
+  senderName: z.string().min(1).max(255).optional(),
+  email:      z.string().email().optional(),
+  smtpPass:   z.string().min(1).optional(),
   smtpHost:   z.string().optional().nullable(),
   smtpPort:   z.coerce.number().int().min(1).max(65535).optional().nullable(),
   smtpUser:   z.string().optional().nullable(),
+});
+
+// POST schema — required fields + custom SMTP validation
+const smtpSchema = smtpBaseSchema.extend({
+  provider:   z.enum(["brevo", "gmail", "custom"]).default("brevo"),
+  senderName: z.string().min(1).max(255),
+  email:      z.string().email(),
+  smtpPass:   z.string().min(1),
 }).refine(
   d => d.provider !== "custom" || (d.smtpHost && d.smtpPort && d.smtpUser),
   { message: "smtpHost, smtpPort and smtpUser are required for custom SMTP" }
 );
+
+// PUT schema — all optional, no cross-field validation needed (COALESCE keeps existing values)
+const smtpUpdateSchema = smtpBaseSchema;
 
 // SELECT columns exposed to the client (never smtp_pass)
 const SELECT_COLS = `id, label, sender_name, email,
@@ -77,7 +87,7 @@ smtpRouter.post("/", requireRole("manager"), asyncHandler(async (req, res) => {
 
 // ─── PUT /api/smtp/:id ─────────────────────────────────────────────────────────
 smtpRouter.put("/:id", requireRole("manager"), asyncHandler(async (req, res) => {
-  const body = smtpSchema.partial().parse(req.body);
+  const body = smtpUpdateSchema.parse(req.body);
 
   const existing = (await query(
     "SELECT id FROM smtp_configs WHERE id = $1 AND hotel_id = $2",
