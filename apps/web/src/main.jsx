@@ -1279,9 +1279,10 @@ function MgrSettings({ api, data, reload, show }) {
   const [connForm, setConnForm] = useState({ fromWaypointId: "", toWaypointId: "", distance: 1 });
   const [checkoutQr, setCheckoutQr] = useState(s.checkout_qr || null);
 
-  // ── SMTP state ──
+  // ── Email config state ──
   const [smtpConfigs, setSmtpConfigs] = useState([]);
-  const [smtpForm, setSmtpForm] = useState({ label: "Default", senderName: "", email: "", smtpHost: "smtp.gmail.com", smtpPort: 587, smtpUser: "", smtpPass: "" });
+  const SMTP_BLANK = { provider: "brevo", label: "Default", senderName: "", email: "", smtpPass: "", smtpHost: "smtp.example.com", smtpPort: 587, smtpUser: "" };
+  const [smtpForm, setSmtpForm] = useState(SMTP_BLANK);
   const [smtpAdding, setSmtpAdding] = useState(false);
   const [smtpTestTo, setSmtpTestTo] = useState("");
   const [smtpTesting, setSmtpTesting] = useState(null);
@@ -1302,9 +1303,9 @@ function MgrSettings({ api, data, reload, show }) {
     try {
       const cfg = await api.request("/api/smtp", { method: "POST", body: JSON.stringify(smtpForm) });
       setSmtpConfigs(c => [...c, cfg]);
-      setSmtpForm({ label: "Default", senderName: "", email: "", smtpHost: "smtp.gmail.com", smtpPort: 587, smtpUser: "", smtpPass: "" });
+      setSmtpForm(SMTP_BLANK);
       setSmtpAdding(false);
-      show("SMTP config saved", "success");
+      show("Email config saved", "success");
     } catch (err) { show(err.message, "error"); }
   }
 
@@ -1387,18 +1388,7 @@ function MgrSettings({ api, data, reload, show }) {
       {tab === "email" && (
         <div className="stack">
           <h2>Email configuration</h2>
-          <p className="muted">Configure your hotel's outgoing email so guests receive booking confirmations, receipts, and verification requests directly from your address.</p>
-
-          <div className="smtp-help-box">
-            <strong>Gmail setup guide</strong>
-            <ol>
-              <li>Enable 2-step verification on your Google account</li>
-              <li>Go to <em>Google Account → Security → App Passwords</em></li>
-              <li>Generate an app password for "Mail"</li>
-              <li>Use that 16-character password below (not your regular Gmail password)</li>
-              <li>SMTP host: <code>smtp.gmail.com</code> · Port: <code>587</code></li>
-            </ol>
-          </div>
+          <p className="muted">Choose how your hotel sends emails to guests — booking confirmations, receipts, and verification requests.</p>
 
           {smtpConfigs.length > 0 && (
             <div className="smtp-list">
@@ -1406,11 +1396,14 @@ function MgrSettings({ api, data, reload, show }) {
                 <div key={cfg.id} className={`smtp-card ${cfg.is_default ? "default" : ""}`}>
                   <div className="smtp-card-header">
                     <span className="smtp-label">{cfg.label}</span>
+                    <span className={`smtp-provider-badge smtp-provider-${cfg.provider || "custom"}`}>
+                      {cfg.provider === "brevo" ? "Brevo" : cfg.provider === "gmail" ? "Gmail" : "Custom SMTP"}
+                    </span>
                     {cfg.is_default && <span className="smtp-badge">Default</span>}
                   </div>
                   <div className="smtp-card-body">
                     <span>{cfg.sender_name} &lt;{cfg.email}&gt;</span>
-                    <span className="muted">{cfg.smtp_host}:{cfg.smtp_port} · user: {cfg.smtp_user}</span>
+                    {cfg.provider === "custom" && <span className="muted">{cfg.smtp_host}:{cfg.smtp_port}</span>}
                   </div>
                   <div className="smtp-card-actions">
                     {!cfg.is_default && (
@@ -1425,20 +1418,11 @@ function MgrSettings({ api, data, reload, show }) {
 
           {smtpConfigs.length > 0 && (
             <div className="smtp-test-row">
-              <input
-                type="email"
-                placeholder="Send test email to…"
-                value={smtpTestTo}
-                onChange={e => setSmtpTestTo(e.target.value)}
-                className="smtp-test-input"
-              />
+              <input type="email" placeholder="Send test email to…" value={smtpTestTo}
+                onChange={e => setSmtpTestTo(e.target.value)} className="smtp-test-input" />
               {smtpConfigs.filter(c => c.is_default).map(cfg => (
-                <button
-                  key={cfg.id}
-                  className="ghost sm"
-                  onClick={() => testSmtp(cfg.id)}
-                  disabled={smtpTesting === cfg.id}
-                >
+                <button key={cfg.id} className="ghost sm" onClick={() => testSmtp(cfg.id)}
+                  disabled={smtpTesting === cfg.id}>
                   <Send size={13} />{smtpTesting === cfg.id ? "Sending…" : "Send test"}
                 </button>
               ))}
@@ -1448,23 +1432,83 @@ function MgrSettings({ api, data, reload, show }) {
           {smtpConfigs.length < 4 && (
             smtpAdding ? (
               <form className="smtp-add-form panel" onSubmit={addSmtp}>
-                <h3>Add SMTP configuration</h3>
+                <h3>Add email sender</h3>
+
+                {/* Provider selector */}
+                <div className="provider-tabs">
+                  {[["brevo","Brevo (recommended)"],["gmail","Gmail"],["custom","Custom SMTP"]].map(([p, label]) => (
+                    <button key={p} type="button"
+                      className={`provider-tab ${smtpForm.provider === p ? "active" : ""}`}
+                      onClick={() => setSmtpForm({ ...SMTP_BLANK, provider: p, label: smtpForm.label, senderName: smtpForm.senderName })}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Provider help boxes */}
+                {smtpForm.provider === "brevo" && (
+                  <div className="smtp-help-box">
+                    <strong>Brevo setup (free · 300 emails/day · works everywhere)</strong>
+                    <ol>
+                      <li>Sign up free at <em>brevo.com</em></li>
+                      <li>Go to <em>Settings → SMTP &amp; API → API Keys</em> → create a key</li>
+                      <li>Go to <em>Settings → Senders &amp; IP</em> → add &amp; verify your sender email</li>
+                      <li>Paste your API key and verified sender address below</li>
+                    </ol>
+                  </div>
+                )}
+                {smtpForm.provider === "gmail" && (
+                  <div className="smtp-help-box">
+                    <strong>Gmail App Password setup</strong>
+                    <ol>
+                      <li>Enable 2-step verification on your Google account</li>
+                      <li>Go to <em>myaccount.google.com → Security → App Passwords</em></li>
+                      <li>Generate an app password for "Mail"</li>
+                      <li>Use the 16-character password below — <em>not</em> your regular Gmail password</li>
+                    </ol>
+                  </div>
+                )}
+                {smtpForm.provider === "custom" && (
+                  <div className="smtp-help-box">
+                    <strong>Custom SMTP server</strong>
+                    <ol>
+                      <li>Use your own mail server credentials</li>
+                      <li>Common ports: <code>587</code> (STARTTLS) or <code>465</code> (SSL)</li>
+                      <li>Note: Render free tier may block outbound SMTP — use Brevo if unsure</li>
+                    </ol>
+                  </div>
+                )}
+
                 <div className="smtp-form-grid">
-                  <input required placeholder="Label (e.g. Main)" value={smtpForm.label} onChange={e => setSmtpForm({ ...smtpForm, label: e.target.value })} />
-                  <input required placeholder="Sender name (e.g. Grand Hotel)" value={smtpForm.senderName} onChange={e => setSmtpForm({ ...smtpForm, senderName: e.target.value })} />
-                  <input required type="email" placeholder="From email address" value={smtpForm.email} onChange={e => setSmtpForm({ ...smtpForm, email: e.target.value })} />
-                  <input required placeholder="SMTP host" value={smtpForm.smtpHost} onChange={e => setSmtpForm({ ...smtpForm, smtpHost: e.target.value })} />
-                  <input required type="number" placeholder="Port (587)" value={smtpForm.smtpPort} onChange={e => setSmtpForm({ ...smtpForm, smtpPort: +e.target.value })} />
-                  <input required placeholder="SMTP username" value={smtpForm.smtpUser} onChange={e => setSmtpForm({ ...smtpForm, smtpUser: e.target.value })} />
-                  <input required type="password" placeholder="App password" value={smtpForm.smtpPass} onChange={e => setSmtpForm({ ...smtpForm, smtpPass: e.target.value })} className="smtp-pass-input" />
+                  <input required placeholder="Label (e.g. Main Gmail)" value={smtpForm.label}
+                    onChange={e => setSmtpForm({ ...smtpForm, label: e.target.value })} />
+                  <input required placeholder="Sender name (e.g. Grand Hotel)" value={smtpForm.senderName}
+                    onChange={e => setSmtpForm({ ...smtpForm, senderName: e.target.value })} />
+                  <input required type="email"
+                    placeholder={smtpForm.provider === "brevo" ? "Verified sender email" : "Gmail address"}
+                    value={smtpForm.email}
+                    onChange={e => setSmtpForm({ ...smtpForm, email: e.target.value })} />
+                  <input required type="password"
+                    placeholder={smtpForm.provider === "brevo" ? "Brevo API key" : smtpForm.provider === "gmail" ? "App password (16 chars)" : "SMTP password"}
+                    value={smtpForm.smtpPass}
+                    onChange={e => setSmtpForm({ ...smtpForm, smtpPass: e.target.value })}
+                    className="smtp-pass-input" />
+                  {smtpForm.provider === "custom" && (<>
+                    <input required placeholder="SMTP host (e.g. smtp.yourhost.com)" value={smtpForm.smtpHost}
+                      onChange={e => setSmtpForm({ ...smtpForm, smtpHost: e.target.value })} />
+                    <input required type="number" placeholder="Port (587)" value={smtpForm.smtpPort}
+                      onChange={e => setSmtpForm({ ...smtpForm, smtpPort: +e.target.value })} />
+                    <input required placeholder="SMTP username" value={smtpForm.smtpUser}
+                      onChange={e => setSmtpForm({ ...smtpForm, smtpUser: e.target.value })} />
+                  </>)}
                 </div>
                 <div className="row-btns">
-                  <button className="primary" type="submit"><Check size={16} />Save config</button>
-                  <button className="ghost" type="button" onClick={() => setSmtpAdding(false)}>Cancel</button>
+                  <button className="primary" type="submit"><Check size={16} />Save</button>
+                  <button className="ghost" type="button" onClick={() => { setSmtpAdding(false); setSmtpForm(SMTP_BLANK); }}>Cancel</button>
                 </div>
               </form>
             ) : (
-              <button className="ghost" onClick={() => setSmtpAdding(true)}><Plus size={16} />Add SMTP config</button>
+              <button className="ghost" onClick={() => setSmtpAdding(true)}><Plus size={16} />Add email config</button>
             )
           )}
         </div>
