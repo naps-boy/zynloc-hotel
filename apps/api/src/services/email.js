@@ -21,8 +21,9 @@ export async function getHotelSmtpConfig(hotelId) {
  */
 function createTransporter(cfg) {
   return nodemailer.createTransport({
-    host: cfg.smtp_host,
-    port: cfg.smtp_port,
+    host:   cfg.smtp_host,
+    port:   cfg.smtp_port,
+    family: 4,             // Force IPv4 — Render free tier blocks IPv6 egress (ENETUNREACH)
     secure: cfg.smtp_port === 465,   // TLS on 465, STARTTLS on 587/25
     auth: { user: cfg.smtp_user, pass: cfg.smtp_pass },
     tls: { rejectUnauthorized: false },  // allow self-signed certs
