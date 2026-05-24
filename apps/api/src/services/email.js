@@ -26,9 +26,9 @@ function createTransporter(cfg) {
     secure: cfg.smtp_port === 465,   // TLS on 465, STARTTLS on 587/25
     auth: { user: cfg.smtp_user, pass: cfg.smtp_pass },
     tls: { rejectUnauthorized: false },  // allow self-signed certs
-    connectionTimeout: 10_000,   // 10 s to establish TCP connection
-    greetingTimeout:   5_000,    // 5 s for SMTP greeting
-    socketTimeout:     15_000,   // 15 s per socket operation
+    connectionTimeout: 30_000,   // 30 s — Render free tier can be slow to route
+    greetingTimeout:   10_000,   // 10 s for SMTP greeting
+    socketTimeout:     45_000,   // 45 s per socket operation
   });
 }
 
@@ -37,25 +37,47 @@ function createTransporter(cfg) {
  * Returns { ok, messageId, error }.
  */
 export async function sendTestEmail(smtpCfg, toAddress) {
-  const transporter = createTransporter(smtpCfg);
-  try {
-    const info = await transporter.sendMail({
-      from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
-      to:      toAddress,
-      subject: "Zynloc Hotel — SMTP test",
-      html: `
+  const testHtml = `
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
 <div style="max-width:480px;margin:auto;background:#162235;border-radius:16px;padding:32px;text-align:center">
   <h2 style="color:#d8a84f;margin:0 0 12px">SMTP connection verified</h2>
   <p style="color:#9aa6b2;margin:0">Your email configuration is working correctly.<br>Zynloc Hotel will now send guest emails from this address.</p>
   <p style="color:#9aa6b2;margin:24px 0 0;font-size:12px">Sent from: ${smtpCfg.email} via ${smtpCfg.smtp_host}:${smtpCfg.smtp_port}</p>
-</div></body></html>`,
+</div></body></html>`;
+
+  const tryPort = async (port) => {
+    const t = createTransporter({ ...smtpCfg, smtp_port: port });
+    return t.sendMail({
+      from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
+      to:      toAddress,
+      subject: "Zynloc Hotel — SMTP test",
+      html:    testHtml,
     });
+  };
+
+  // Connection-level error codes that warrant a port fallback
+  const isConnErr = code => ["ECONNECTION","ETIMEDOUT","ENETUNREACH","ECONNREFUSED"].includes(code);
+
+  try {
+    const info = await tryPort(smtpCfg.smtp_port);
     console.log(`[Email] Test email sent — messageId=${info.messageId}`);
     return { ok: true, messageId: info.messageId };
   } catch (err) {
-    console.error("[Email] Test email failed:", err.message);
-    return { ok: false, error: err.message };
+    console.error(`[Email] Test failed on port ${smtpCfg.smtp_port}: [${err.code}] ${err.message}`);
+
+    // Auto-retry on port 465 when 587 fails with a TCP/routing error
+    if (smtpCfg.smtp_port === 587 && isConnErr(err.code)) {
+      console.log("[Email] Retrying on port 465 (TLS)…");
+      try {
+        const info = await tryPort(465);
+        console.log(`[Email] Test email sent via fallback 465 — messageId=${info.messageId}`);
+        return { ok: true, messageId: info.messageId };
+      } catch (err2) {
+        console.error(`[Email] Fallback port 465 also failed: [${err2.code}] ${err2.message}`);
+        return { ok: false, error: err2.message, code: err2.code };
+      }
+    }
+    return { ok: false, error: err.message, code: err.code };
   }
 }
 

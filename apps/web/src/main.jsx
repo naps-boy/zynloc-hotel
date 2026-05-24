@@ -9,7 +9,7 @@ import {
   Check, CheckCircle, ChevronRight, DoorOpen, Dumbbell, FileDown,
   Globe, Hotel, LogOut, Map, MessageSquare, Navigation, PhoneCall,
   Plus, QrCode, Send, Settings, ShieldCheck, Sparkles, Star, Truck,
-  Upload, Users, X, XCircle, Zap
+  Upload, Users, X, XCircle, Zap, ZoomIn
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { t, LANGUAGES } from "./lib/i18n.js";
@@ -294,6 +294,28 @@ function ImageUpload({ value, onChange, label = "Upload image", maxWidth = 1200 
   );
 }
 
+// ── ZoomImg ───────────────────────────────────────────────────────────────────
+// Wraps any <img> to make it tappable/clickable for fullscreen lightbox view.
+
+function ZoomImg({ src, alt = "", className = "", block = false }) {
+  const [open, setOpen] = useState(false);
+  if (!src) return null;
+  return (
+    <div className={`zoom-wrap${block ? " zoom-wrap-block" : ""}`} onClick={() => setOpen(true)}>
+      <img src={src} alt={alt} className={className} />
+      <div className="zoom-badge"><ZoomIn size={12} /></div>
+      {open && (
+        <div className="lightbox-overlay" onClick={e => { e.stopPropagation(); setOpen(false); }}>
+          <img src={src} alt={alt} className="lightbox-img" onClick={e => e.stopPropagation()} />
+          <button className="lightbox-close" onClick={e => { e.stopPropagation(); setOpen(false); }}>
+            <X size={22} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── QrScanner ─────────────────────────────────────────────────────────────────
 
 function QrScanner({ onScan, onClose }) {
@@ -503,19 +525,22 @@ function OnboardRooms({ api, onNext, show }) {
     <div className="stack">
       <h2>Add Rooms</h2>
       <p className="muted">Add at least one room. More can be added later.</p>
-      <form className="inline-form" onSubmit={add}>
-        <input required placeholder="Room number" value={form.number} onChange={e => setForm({ ...form, number: e.target.value })} />
-        <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
-          {["single","double","suite","villa"].map(x => <option key={x}>{x}</option>)}
-        </select>
-        <input type="number" placeholder="$/night" value={form.pricePerNight} onChange={e => setForm({ ...form, pricePerNight: +e.target.value })} />
-        <input placeholder="Photo URL" value={form.imageUrl} onChange={e => setForm({ ...form, imageUrl: e.target.value })} />
-        <button className="primary" type="submit"><Plus size={18} />Add</button>
+      <form className="stack" onSubmit={add}>
+        <div className="inline-form">
+          <input required placeholder="Room number" value={form.number} onChange={e => setForm({ ...form, number: e.target.value })} />
+          <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+            {["single","double","suite","villa"].map(x => <option key={x}>{x}</option>)}
+          </select>
+          <input type="number" placeholder="$/night" value={form.pricePerNight} onChange={e => setForm({ ...form, pricePerNight: +e.target.value })} />
+        </div>
+        <label className="upload-field-label">Room photo (optional)</label>
+        <ImageUpload value={form.imageUrl} onChange={v => setForm({ ...form, imageUrl: v })} label="Upload room photo" maxWidth={800} />
+        <button className="primary" type="submit"><Plus size={18} />Add room</button>
       </form>
       <div className="cards">
         {rooms.map(r => (
           <article className="room-card" key={r.id}>
-            {r.image_url && <img src={r.image_url} alt="" />}
+            <ZoomImg src={r.image_url} alt={`Room ${r.number}`} block />
             <div><BedDouble size={15} /><h3>{r.number}</h3><p>{r.type} · ${r.price_per_night}/night</p></div>
           </article>
         ))}
@@ -744,11 +769,20 @@ function ManagerDashboard({ api, initialSettings }) {
 
   useEffect(() => { loadAll().catch(() => api.logout()); }, []);
 
+  // Stable ref so socket callbacks always call the latest loadAll without stale closure
+  const loadAllRef = useRef(loadAll);
+  useEffect(() => { loadAllRef.current = loadAll; });
+
   useEffect(() => {
     if (!me?.hotel_id) return;
+    const hotelId = me.hotel_id;
+    const doLoad = () => loadAllRef.current();
     const socket = io(API);
-    socket.emit("hotel:join", me.hotel_id);
-    ["rooms:changed","bookings:changed","messages:new","notifications:new"].forEach(ev => socket.on(ev, loadAll));
+    // Re-join hotel room on every (re)connect so Render restarts don't break sync
+    socket.on("connect", () => socket.emit("hotel:join", hotelId));
+    socket.emit("hotel:join", hotelId);
+    ["rooms:changed","bookings:changed","messages:new","notifications:new",
+     "service-requests:new","service-requests:changed"].forEach(ev => socket.on(ev, doLoad));
     socket.on("access:denied", ev => show(`Access denied: ${ev.guestName} at ${ev.facilityName}`, "warning"));
     // verification:result is emitted by backend after the guest submits their live selfie comparison
     socket.on("verification:result", ev => { setVerifyReq(ev); show(`Verification: ${ev.guestName} — ${ev.verified ? "✓ Verified" : "✗ Failed"}`, ev.verified ? "success" : "warning"); });
@@ -879,28 +913,33 @@ function MgrRooms({ api, data, reload, show }) {
     } catch (err) { show(err.message, "error"); }
   }
   return (
-    <GridPage form={
-      <form className="inline-form" onSubmit={add}>
-        <input required placeholder="Room #" value={form.number} onChange={e => setForm({ ...form, number: e.target.value })} />
-        <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
-          {["single","double","suite","villa"].map(x => <option key={x}>{x}</option>)}
-        </select>
-        <input type="number" value={form.pricePerNight} onChange={e => setForm({ ...form, pricePerNight: +e.target.value })} />
-        <input placeholder="Photo URL" value={form.imageUrl} onChange={e => setForm({ ...form, imageUrl: e.target.value })} />
-        <button className="primary" type="submit"><Plus size={18} />Add</button>
+    <div className="stack">
+      <form className="panel stack" onSubmit={add}>
+        <h2>Add room</h2>
+        <div className="inline-form">
+          <input required placeholder="Room #" value={form.number} onChange={e => setForm({ ...form, number: e.target.value })} />
+          <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+            {["single","double","suite","villa"].map(x => <option key={x}>{x}</option>)}
+          </select>
+          <input type="number" placeholder="$/night" value={form.pricePerNight} onChange={e => setForm({ ...form, pricePerNight: +e.target.value })} />
+        </div>
+        <label className="upload-field-label">Room photo (optional)</label>
+        <ImageUpload value={form.imageUrl} onChange={v => setForm({ ...form, imageUrl: v })} label="Upload room photo" maxWidth={800} />
+        <button className="primary" type="submit"><Plus size={18} />Add room</button>
       </form>
-    }>
-      {data.rooms.map(room => (
-        <article className="room-card" key={room.id}>
-          {room.image_url && <img src={room.image_url} alt="" />}
-          <div>
-            <BedDouble size={14} /><h3>{room.number}</h3>
-            <p>{room.type} · ${room.price_per_night}/night</p>
-            <span className={`pill ${room.status}`}>{room.status}</span>
-          </div>
-        </article>
-      ))}
-    </GridPage>
+      <div className="cards">
+        {data.rooms.map(room => (
+          <article className="room-card" key={room.id}>
+            <ZoomImg src={room.image_url} alt={`Room ${room.number}`} block />
+            <div>
+              <BedDouble size={14} /><h3>{room.number}</h3>
+              <p>{room.type} · ${room.price_per_night}/night</p>
+              <span className={`pill ${room.status}`}>{room.status}</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -993,7 +1032,7 @@ function MgrGuests({ api, data, reload, show }) {
       {data.guests.map(g => (
         <div className="row" key={g.id}>
           <div className="guest-avatar">
-            {g.selfie_url ? <img src={g.selfie_url} alt="" /> : <span>{g.name?.[0] || "?"}</span>}
+            {g.selfie_url ? <ZoomImg src={g.selfie_url} alt={g.name} className="guest-thumb-img" /> : <span>{g.name?.[0] || "?"}</span>}
           </div>
           <div><strong>{g.name}</strong><small>{g.email}</small></div>
           <span>Room {g.room_number || "–"}</span>
@@ -1490,8 +1529,8 @@ function VerificationPanel({ req, onDone }) {
       <h2>Live Identity Verification</h2>
       <p>Guest: <strong>{req.guestName}</strong> · Room <strong>{req.roomNumber}</strong></p>
       <div className="verify-faces">
-        {req.storedSelfie && <div><p className="muted">Profile photo</p><img className="selfie-img" src={req.storedSelfie} alt="Profile" /></div>}
-        {req.liveSelfieUrl && <div><p className="muted">Live selfie</p><img className="selfie-img" src={req.liveSelfieUrl} alt="Live" /></div>}
+        {req.storedSelfie && <div><p className="muted">Profile photo</p><ZoomImg src={req.storedSelfie} alt="Profile" className="selfie-img" /></div>}
+        {req.liveSelfieUrl && <div><p className="muted">Live selfie</p><ZoomImg src={req.liveSelfieUrl} alt="Live" className="selfie-img" /></div>}
       </div>
       <div className={`verify-result ${req.verified ? "verified" : "failed"}`}>
         {req.verified ? <CheckCircle size={32} /> : <XCircle size={32} />}

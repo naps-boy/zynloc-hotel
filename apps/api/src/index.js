@@ -1,3 +1,5 @@
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");   // Force IPv4 — Render free tier blocks IPv6 egress
 import http from "node:http";
 import cors from "cors";
 import express from "express";
