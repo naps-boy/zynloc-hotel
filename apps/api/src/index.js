@@ -47,6 +47,24 @@ app.use(express.json({ limit: "10mb" }));  // raised for base64 selfie uploads
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "zynloc-api" }));
 
+// Temporary network probe — verifies Brevo HTTPS reachability from this server's network
+// Returns within ~2s; remove after confirming Brevo works on Render
+app.get("/health/net-probe", async (_req, res) => {
+  const start = Date.now();
+  try {
+    const r = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: { "api-key": "PROBE", "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: { email: "x@x.com" }, to: [{ email: "x@x.com" }], subject: "probe", htmlContent: "probe" }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const json = await r.json().catch(() => ({}));
+    res.json({ reachable: true, status: r.status, body: json, ms: Date.now() - start });
+  } catch (err) {
+    res.json({ reachable: false, error: err.message, code: err.code, ms: Date.now() - start });
+  }
+});
+
 app.use("/api/auth",             authRouter);
 app.use("/api/rooms",            roomsRouter);
 app.use("/api/bookings",         bookingsRouter);
