@@ -15,8 +15,12 @@ export async function getHotelSmtpConfig(hotelId) {
 // ── Provider: Brevo HTTP API (port 443 — works on Render free tier) ──────────
 
 async function sendViaBrevo(cfg, mailOpts) {
-  // cfg.smtp_pass holds the Brevo API key
-  // cfg.email    is the verified sender address in the Brevo account
+  // cfg.smtp_pass holds the Brevo API key — trim to strip any accidental whitespace
+  const apiKey = (cfg.smtp_pass || "").trim();
+  console.log(`[Brevo] key_len=${apiKey.length} key_prefix="${apiKey.substring(0, 20)}" sender=${cfg.email}`);
+
+  if (!apiKey) throw new Error("Brevo API key is empty");
+
   const to = Array.isArray(mailOpts.to)
     ? mailOpts.to.map(e => ({ email: e.trim() }))
     : [{ email: mailOpts.to }];
@@ -40,13 +44,14 @@ async function sendViaBrevo(cfg, mailOpts) {
   const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method:  "POST",
     headers: {
-      "api-key":      cfg.smtp_pass,
+      "api-key":      apiKey,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
   });
 
   const json = await res.json().catch(() => ({}));
+  console.log(`[Brevo] HTTP ${res.status} response:`, JSON.stringify(json));
   if (!res.ok) throw new Error(json.message || `Brevo error ${res.status}`);
   console.log(`[Email] Brevo sent — messageId=${json.messageId}`);
   return { messageId: json.messageId };

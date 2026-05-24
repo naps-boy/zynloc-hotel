@@ -171,7 +171,13 @@ smtpRouter.post("/:id/test", requireRole("manager"), asyncHandler(async (req, re
   );
   if (!rows.length) throw new HttpError(404, "Email config not found");
 
-  const result = await sendTestEmail(rows[0], to);
+  const cfg = rows[0];
+  console.log(
+    `[SMTP Test] id=${cfg.id} provider=${cfg.provider} email=${cfg.email}` +
+    ` pass_len=${cfg.smtp_pass?.length ?? 0} pass_prefix="${cfg.smtp_pass?.substring(0, 20) ?? ""}"`
+  );
+
+  const result = await sendTestEmail(cfg, to);
   if (!result.ok) throw new HttpError(502, `Email error: ${result.error}`);
   res.json({ ok: true, messageId: result.messageId });
 }));
