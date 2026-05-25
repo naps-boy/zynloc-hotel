@@ -294,16 +294,22 @@ export async function sendCheckoutReceipt({ guest, hotel, booking }) {
 }
 
 export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, resetLink }) {
-  // Bypass the silent-fail send() wrapper so every step is fully visible in logs.
-  console.log(`[PasswordReset] Fetching SMTP config for hotel ${hotelId}`);
-  const smtpCfg = await getHotelSmtpConfig(hotelId);
+  // Try ALL smtp configs for the hotel (default first, then any remaining).
+  // This handles the case where the default config has a stale/revoked key —
+  // we fall through to the next config automatically.
+  console.log(`[PasswordReset] Looking up all SMTP configs for hotel ${hotelId}`);
 
-  if (!smtpCfg) {
-    console.error(`[PasswordReset] FATAL: no SMTP config (is_default=TRUE) found for hotel ${hotelId}. Cannot send reset email to ${staffEmail}.`);
+  const { rows: allConfigs } = await query(
+    "SELECT * FROM smtp_configs WHERE hotel_id = $1 ORDER BY is_default DESC, created_at DESC",
+    [hotelId]
+  );
+
+  if (!allConfigs.length) {
+    console.error(`[PasswordReset] FATAL: no SMTP configs at all for hotel ${hotelId} — cannot send to ${staffEmail}`);
     return;
   }
 
-  console.log(`[PasswordReset] SMTP config found — provider=${smtpCfg.provider}, sender=${smtpCfg.email}`);
+  console.log(`[PasswordReset] Found ${allConfigs.length} SMTP config(s)`);
 
   const html = `
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
@@ -320,26 +326,35 @@ export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, r
   </p>
 </div></body></html>`;
 
-  const mailOpts = {
-    from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
-    to:      staffEmail,
-    subject: "Zynloc Hotel — Password Reset",
-    html,
-  };
+  for (let i = 0; i < allConfigs.length; i++) {
+    const smtpCfg = allConfigs[i];
+    const label = `config[${i}] id=${smtpCfg.id} provider=${smtpCfg.provider} sender=${smtpCfg.email} is_default=${smtpCfg.is_default}`;
+    console.log(`[PasswordReset] Trying ${label}`);
 
-  console.log(`[PasswordReset] Sending to ${staffEmail} via provider=${smtpCfg.provider}`);
+    const mailOpts = {
+      from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
+      to:      staffEmail,
+      subject: "Zynloc Hotel — Password Reset",
+      html,
+    };
 
-  try {
-    if (smtpCfg.provider === "brevo") {
-      const result = await sendViaBrevo(smtpCfg, mailOpts);
-      console.log(`[PasswordReset] Brevo success — messageId=${result.messageId}`);
-    } else {
-      const info = await createSmtpTransporter(smtpCfg).sendMail(mailOpts);
-      console.log(`[PasswordReset] SMTP success — messageId=${info.messageId}`);
+    try {
+      if (smtpCfg.provider === "brevo") {
+        const result = await sendViaBrevo(smtpCfg, mailOpts);
+        console.log(`[PasswordReset] SUCCESS via ${label} — messageId=${result.messageId}`);
+        return; // sent — stop trying
+      } else {
+        const info = await createSmtpTransporter(smtpCfg).sendMail(mailOpts);
+        console.log(`[PasswordReset] SUCCESS via ${label} — messageId=${info.messageId}`);
+        return; // sent — stop trying
+      }
+    } catch (err) {
+      const hasMore = i < allConfigs.length - 1;
+      console.error(`[PasswordReset] FAILED via ${label}: ${err.message}${hasMore ? " — trying next config" : " — no more configs"}`);
     }
-  } catch (err) {
-    console.error(`[PasswordReset] Send FAILED for ${staffEmail}:`, err.message);
   }
+
+  console.error(`[PasswordReset] All ${allConfigs.length} SMTP config(s) exhausted. Email NOT sent to ${staffEmail}.`);
 }
 
 export async function sendVerificationRequest({ guest, hotel }) {
