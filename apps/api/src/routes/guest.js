@@ -16,6 +16,9 @@ async function requireValidQr(req, _res, next) {
     if (qr.status === "past" || qr.status === "cancelled") {
       throw new HttpError(410, "This booking has ended");
     }
+    if (qr.revoked) {
+      throw new HttpError(403, "Your access has been revoked. Please contact the hotel.");
+    }
     req.qr = qr;
     next();
   } catch (err) { next(err); }
@@ -128,8 +131,39 @@ guestRouter.post("/:token/checkin", requireValidQr, asyncHandler(async (req, res
   )).rows[0];
   emitHotel(req.qr.hotel_id, "notifications:new", notif);
   emitHotel(req.qr.hotel_id, "bookings:changed", { id: req.qr.booking_id, status: "current" });
-  // Push to guest
-  emitHotel(req.qr.hotel_id, `guest:${req.qr.guest_id}:checkin`, { roomNumber: req.qr.room_number });
+  // Push directly to guest app so their waiting screen updates immediately
+  emitBooking(req.qr.booking_id, "checkin:confirmed", { roomNumber: req.qr.room_number });
+  res.json({ ok: true });
+}));
+
+// ─── POST /:token/scan-reception — guest scanned hotel reception QR ───────────
+guestRouter.post("/:token/scan-reception", requireValidQr, asyncHandler(async (req, res) => {
+  const { receptionToken } = z.object({ receptionToken: z.string() }).parse(req.body);
+  const hotel = (await query(
+    "SELECT id, reception_token, reception_token_expires_at FROM hotels WHERE id = $1",
+    [req.qr.hotel_id]
+  )).rows[0];
+
+  if (!hotel?.reception_token || hotel.reception_token !== receptionToken) {
+    throw new HttpError(404, "Invalid reception QR — please get a fresh one from the hotel");
+  }
+  if (new Date(hotel.reception_token_expires_at) < new Date()) {
+    throw new HttpError(410, "Reception QR has expired — ask staff to refresh it");
+  }
+
+  emitHotel(req.qr.hotel_id, "guest:arrived", {
+    bookingId:   req.qr.booking_id,
+    guestName:   req.qr.guest_name,
+    guestEmail:  req.qr.guest_email,
+    selfieUrl:   req.qr.selfie_url,
+    roomNumber:  req.qr.room_number,
+    roomType:    req.qr.room_type,
+    checkIn:     req.qr.check_in,
+    checkOut:    req.qr.check_out,
+    qrToken:     req.qr.token,
+    packageType: req.qr.package_type,
+  });
+
   res.json({ ok: true });
 }));
 

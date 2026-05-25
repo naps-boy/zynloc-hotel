@@ -379,6 +379,10 @@ function App() {
   const api = useApi();
   const parts = window.location.pathname.split("/").filter(Boolean);
   if (parts[0] === "guest" && parts[1]) return <GuestApp token={parts[1]} />;
+  const params = new URLSearchParams(window.location.search);
+  if (parts[0] === "reset-password" && params.get("token")) {
+    return <ResetPassword resetToken={params.get("token")} />;
+  }
   if (!api.token) return <Login api={api} />;
   return <ManagerRoot api={api} />;
 }
@@ -389,12 +393,21 @@ function Login({ api }) {
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ hotelName: "Zynloc Demo", name: "Hotel Manager", email: "", password: "" });
   const [error, setError] = useState("");
+  const [forgotMsg, setForgotMsg] = useState("");
   const isLocal = ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   async function submit(e) {
     e.preventDefault();
     setError("");
     try {
+      if (mode === "forgot") {
+        await fetch(`${API}/api/auth/forgot-password`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: form.email })
+        });
+        setForgotMsg("If that email exists, a reset link has been sent.");
+        return;
+      }
       const path = mode === "login" ? "/api/auth/login" : "/api/auth/register-manager";
       const result = await api.request(path, { method: "POST", body: JSON.stringify(form) });
       api.saveToken(result.token);
@@ -417,7 +430,7 @@ function Login({ api }) {
     <main className="auth-shell">
       <section className="auth-panel">
         <div className="brand-lockup"><Hotel size={28} /><span>Zynloc Hotel</span></div>
-        <h1>{mode === "login" ? "Manager Login" : "Create Hotel"}</h1>
+        <h1>{mode === "login" ? "Manager Login" : mode === "register" ? "Create Hotel" : "Reset Password"}</h1>
         <form onSubmit={submit} className="stack">
           {mode === "register" && (
             <>
@@ -426,14 +439,73 @@ function Login({ api }) {
             </>
           )}
           <input type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
-          <input type="password" placeholder="Password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+          {mode !== "forgot" && (
+            <input type="password" placeholder="Password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+          )}
           {error && <p className="error">{error}</p>}
-          <button className="primary" type="submit"><ShieldCheck size={18} />{mode === "login" ? "Sign in" : "Create account"}</button>
+          {forgotMsg && <p className="success-text">{forgotMsg}</p>}
+          <button className="primary" type="submit">
+            <ShieldCheck size={18} />
+            {mode === "login" ? "Sign in" : mode === "register" ? "Create account" : "Send reset link"}
+          </button>
+          {mode === "login" && (
+            <button type="button" className="forgot-link" onClick={() => { setMode("forgot"); setError(""); setForgotMsg(""); }}>
+              Forgot password?
+            </button>
+          )}
         </form>
-        {isLocal && <button className="demo-login" onClick={demo}>Open local demo dashboard</button>}
-        <button type="button" className="text-button" onClick={() => setMode(m => m === "login" ? "register" : "login")}>
-          {mode === "login" ? "Create a hotel account" : "Back to login"}
+        {isLocal && mode === "login" && <button className="demo-login" onClick={demo}>Open local demo dashboard</button>}
+        <button type="button" className="text-button" onClick={() => { setMode(m => m === "login" ? "register" : "login"); setError(""); setForgotMsg(""); }}>
+          {mode === "login" ? "Create a hotel account" : mode === "register" ? "Back to login" : "Back to login"}
         </button>
+      </section>
+    </main>
+  );
+}
+
+// ── ResetPassword ─────────────────────────────────────────────────────────────
+
+function ResetPassword({ resetToken }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (password !== confirm) { setError("Passwords don't match"); return; }
+    setError("");
+    try {
+      const res = await fetch(`${API}/api/auth/reset-password`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password })
+      });
+      const j = await res.json();
+      if (!res.ok) { setError(j.error || "Invalid or expired link"); return; }
+      setDone(true);
+      setMsg("Password updated! You can now sign in.");
+    } catch { setError("Network error — please try again"); }
+  }
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel">
+        <div className="brand-lockup"><Hotel size={28} /><span>Zynloc Hotel</span></div>
+        <h1>New Password</h1>
+        {done ? (
+          <div className="stack">
+            <p className="success-text"><CheckCircle size={16} /> {msg}</p>
+            <a className="primary" href="/" style={{ textDecoration: "none" }}>Go to login</a>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="stack">
+            <input required type="password" placeholder="New password (8+ chars)" value={password} onChange={e => setPassword(e.target.value)} />
+            <input required type="password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} />
+            {error && <p className="error">{error}</p>}
+            <button className="primary" type="submit"><Check size={18} />Set password</button>
+          </form>
+        )}
       </section>
     </main>
   );
@@ -696,6 +768,7 @@ function ManagerDashboard({ api, initialSettings }) {
     messages: [], notifications: [], analytics: null, settings: initialSettings,
     staff: [], accessLog: [], serviceRequests: []
   });
+  const [arrivals, setArrivals] = useState([]);
   const { toast, show } = useToast();
 
   const NAV = [
@@ -782,6 +855,10 @@ function ManagerDashboard({ api, initialSettings }) {
     ["rooms:changed","bookings:changed","messages:new","notifications:new",
      "service-requests:new","service-requests:changed"].forEach(ev => socket.on(ev, doLoad));
     socket.on("access:denied", ev => show(`Access denied: ${ev.guestName} at ${ev.facilityName}`, "warning"));
+    socket.on("guest:arrived", ev => {
+      setArrivals(prev => [...prev, { ...ev, arrivedAt: Date.now() }]);
+      show(`${ev.guestName} has arrived at reception!`, "success");
+    });
     return () => socket.disconnect();
   }, [me?.hotel_id]);
 
@@ -838,13 +915,40 @@ function ManagerDashboard({ api, initialSettings }) {
           </div>
           <aside className="alerts-rail">
             <h2>Live alerts</h2>
-            {data.notifications.slice(0, 8).map(n => (
+            {arrivals.map((a, i) => (
+              <div className="arrival-card" key={`${a.bookingId}-${a.arrivedAt}`}>
+                <div className="arrival-card-header">
+                  {a.selfieUrl
+                    ? <img src={a.selfieUrl} alt={a.guestName} className="arrival-photo" />
+                    : <div className="arrival-no-photo"><Users size={20} /></div>
+                  }
+                  <div className="arrival-info">
+                    <strong>{a.guestName}</strong>
+                    <small>Room {a.roomNumber} · arrived</small>
+                  </div>
+                </div>
+                <button className="arrival-confirm-btn" onClick={async () => {
+                  try {
+                    await api.request(`/api/guest/${a.qrToken}/checkin`, { method: "POST" });
+                    setArrivals(prev => prev.filter((_, j) => j !== i));
+                    show(`${a.guestName} checked in to Room ${a.roomNumber} ✓`, "success");
+                    loadAll();
+                  } catch (err) { show(err.message, "error"); }
+                }}>
+                  <Check size={14} />Confirm Check-In
+                </button>
+                <button className="arrival-dismiss-btn" onClick={() => setArrivals(prev => prev.filter((_, j) => j !== i))}>
+                  Dismiss
+                </button>
+              </div>
+            ))}
+            {data.notifications.slice(0, 6).map(n => (
               <article className="notice compact" key={n.id}>
                 <Bell size={14} />
                 <div><strong>{n.title}</strong><p>{n.body}</p></div>
               </article>
             ))}
-            {!data.notifications.length && <p className="muted">No alerts</p>}
+            {!arrivals.length && !data.notifications.length && <p className="muted">No alerts</p>}
           </aside>
         </section>
       </section>
@@ -942,6 +1046,8 @@ function MgrBookings({ api, data, reload, show }) {
   const [scanning, setScanning] = useState(false);
   const [checkinData, setCheckinData] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const [search, setSearch] = useState("");
+  const [revoking, setRevoking] = useState(null);
 
   async function create(e) {
     e.preventDefault();
@@ -986,6 +1092,27 @@ function MgrBookings({ api, data, reload, show }) {
     show(`Issue flagged for ${checkinData?.guest_name} — Room ${checkinData?.room_number}`, "warning");
     setCheckinData(null);
   }
+
+  async function revokeBooking(id) {
+    setRevoking(id);
+    try { await api.request(`/api/bookings/${id}/revoke`, { method: "POST" }); reload(); show("Access revoked", "success"); }
+    catch (err) { show(err.message, "error"); }
+    setRevoking(null);
+  }
+
+  async function restoreBooking(id) {
+    setRevoking(id);
+    try { await api.request(`/api/bookings/${id}/restore`, { method: "POST" }); reload(); show("Access restored", "success"); }
+    catch (err) { show(err.message, "error"); }
+    setRevoking(null);
+  }
+
+  const filteredBookings = search.trim()
+    ? data.bookings.filter(b =>
+        (b.guest_name || "").toLowerCase().includes(search.toLowerCase()) ||
+        (b.guest_email || "").toLowerCase().includes(search.toLowerCase())
+      )
+    : data.bookings;
 
   return (
     <section className="split">
@@ -1037,9 +1164,21 @@ function MgrBookings({ api, data, reload, show }) {
           </div>
         )}
 
+        <div className="guest-search">
+          <Users size={14} />
+          <input
+            placeholder="Search by name or email…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+
         <div className="table">
-          {data.bookings.map(b => (
-            <div className="row booking-row" key={b.id}>
+          {filteredBookings.map(b => (
+            <div className="row booking-row" key={b.id}
+              style={{ cursor: b.qr_token ? "pointer" : "default", opacity: b.revoked ? 0.6 : 1 }}
+              onClick={() => { if (b.qr_token && !b.revoked) setCheckinData({ ...b, facilities: [] }); }}
+            >
               <div className="guest-avatar booking-avatar">
                 {b.selfie_url
                   ? <img src={b.selfie_url} alt={b.guest_name} className="booking-avatar-img" />
@@ -1048,18 +1187,26 @@ function MgrBookings({ api, data, reload, show }) {
               </div>
               <div><strong>{b.guest_name}</strong><small>{b.guest_email}</small></div>
               <span>Room {b.room_number}</span>
-              <span className={`pill ${b.status}`}>{b.status}</span>
+              <span className={`pill ${b.revoked ? "revoked" : b.status}`}>{b.revoked ? "revoked" : b.status}</span>
               <span>{fmtDate(b.check_in)}</span>
               <span className={`pill ${b.profile_status || "pending"}`}>{b.profile_status || "pending"}</span>
-              <div className="row-actions">
+              <div className="row-actions" onClick={e => e.stopPropagation()}>
                 {b.qr_data_url && <img src={b.qr_data_url} alt="QR" className="mini-qr" />}
                 <button className="ghost sm" onClick={() => resend(b.id)} disabled={resending === b.id}>
                   {resending === b.id ? "Sending…" : "Resend"}
                 </button>
+                {b.revoked
+                  ? <button className="restore-btn" onClick={() => restoreBooking(b.id)} disabled={revoking === b.id}>
+                      <CheckCircle size={12} />{revoking === b.id ? "…" : "Restore"}
+                    </button>
+                  : <button className="revoke-btn" onClick={() => revokeBooking(b.id)} disabled={revoking === b.id}>
+                      <X size={12} />{revoking === b.id ? "…" : "Revoke"}
+                    </button>
+                }
               </div>
             </div>
           ))}
-          {!data.bookings.length && <p className="muted">No bookings yet</p>}
+          {!filteredBookings.length && <p className="muted">{search ? "No matching bookings" : "No bookings yet"}</p>}
         </div>
       </div>
 
@@ -1069,19 +1216,52 @@ function MgrBookings({ api, data, reload, show }) {
 }
 
 function MgrGuests({ api, data, reload, show }) {
+  const [revoking, setRevoking] = useState(null);
+
+  async function revokeBooking(bookingId) {
+    setRevoking(bookingId);
+    try { await api.request(`/api/bookings/${bookingId}/revoke`, { method: "POST" }); reload(); show("Access revoked", "success"); }
+    catch (err) { show(err.message, "error"); }
+    setRevoking(null);
+  }
+
+  async function restoreBooking(bookingId) {
+    setRevoking(bookingId);
+    try { await api.request(`/api/bookings/${bookingId}/restore`, { method: "POST" }); reload(); show("Access restored", "success"); }
+    catch (err) { show(err.message, "error"); }
+    setRevoking(null);
+  }
+
   return (
     <div className="table wide-table">
-      {data.guests.map(g => (
-        <div className="row" key={g.id}>
-          <div className="guest-avatar">
-            {g.selfie_url ? <ZoomImg src={g.selfie_url} alt={g.name} className="guest-thumb-img" /> : <span>{g.name?.[0] || "?"}</span>}
+      {data.guests.map(g => {
+        const booking = data.bookings.find(b => b.guest_email === g.email);
+        return (
+          <div className="row" key={g.id} style={{ opacity: booking?.revoked ? 0.6 : 1 }}>
+            <div className="guest-avatar">
+              {g.selfie_url ? <ZoomImg src={g.selfie_url} alt={g.name} className="guest-thumb-img" /> : <span>{g.name?.[0] || "?"}</span>}
+            </div>
+            <div><strong>{g.name}</strong><small>{g.email}</small></div>
+            <span>Room {g.room_number || "–"}</span>
+            <span className={`pill ${booking?.revoked ? "revoked" : g.profile_status || "pending"}`}>
+              {booking?.revoked ? "revoked" : g.profile_status || "pending"}
+            </span>
+            <span>{g.current_location || "–"}</span>
+            {booking && (
+              <div className="row-actions">
+                {booking.revoked
+                  ? <button className="restore-btn" onClick={() => restoreBooking(booking.id)} disabled={revoking === booking.id}>
+                      <CheckCircle size={12} />{revoking === booking.id ? "…" : "Restore"}
+                    </button>
+                  : <button className="revoke-btn" onClick={() => revokeBooking(booking.id)} disabled={revoking === booking.id}>
+                      <X size={12} />{revoking === booking.id ? "…" : "Revoke"}
+                    </button>
+                }
+              </div>
+            )}
           </div>
-          <div><strong>{g.name}</strong><small>{g.email}</small></div>
-          <span>Room {g.room_number || "–"}</span>
-          <span className={`pill ${g.profile_status || "pending"}`}>{g.profile_status || "pending"}</span>
-          <span>{g.current_location || "–"}</span>
-        </div>
-      ))}
+        );
+      })}
       {!data.guests.length && <p className="muted">No guests yet</p>}
     </div>
   );
@@ -1319,6 +1499,8 @@ function MgrSettings({ api, data, reload, show }) {
   const [wpForm, setWpForm] = useState({ name: "", x: 0, y: 0, floor: 1, photoUrl: "" });
   const [connForm, setConnForm] = useState({ fromWaypointId: "", toWaypointId: "", distance: 1 });
   const [checkoutQr, setCheckoutQr] = useState(s.checkout_qr || null);
+  const [receptionQr, setReceptionQr] = useState(null);
+  const [receptionExpiry, setReceptionExpiry] = useState(null);
 
   // ── Email config state ──
   const [smtpConfigs, setSmtpConfigs] = useState([]);
@@ -1337,6 +1519,12 @@ function MgrSettings({ api, data, reload, show }) {
 
   useEffect(() => {
     if (tab === "email") api.request("/api/smtp").then(setSmtpConfigs).catch(() => {});
+    if (tab === "qr") {
+      api.request("/api/settings/reception-qr").then(r => {
+        setReceptionQr(r.qr_data_url);
+        setReceptionExpiry(Math.max(0, Math.floor((new Date(r.expires_at) - Date.now()) / 60000)));
+      }).catch(() => {});
+    }
   }, [tab]);
 
   async function addSmtp(e) {
@@ -1596,8 +1784,19 @@ function MgrSettings({ api, data, reload, show }) {
 
       {tab === "qr" && (
         <div className="stack">
+          <h2>Reception QR</h2>
+          <p className="muted">Display this at your front desk. Guests scan it on arrival to notify staff. Refreshes every 30 minutes.</p>
+          <QrBlock dataUrl={receptionQr} label={receptionExpiry !== null ? `Expires in ${receptionExpiry} min` : "Reception QR"} />
+          <button className="ghost" onClick={() => {
+            api.request("/api/settings/reception-qr").then(r => {
+              setReceptionQr(r.qr_data_url);
+              setReceptionExpiry(Math.max(0, Math.floor((new Date(r.expires_at) - Date.now()) / 60000)));
+            }).catch(err => show(err.message, "error"));
+          }}><QrCode size={15} />Refresh</button>
+
+          <div className="divider" style={{ margin: "8px 0" }} />
           <h2>Checkout QR</h2>
-          <p className="muted">Place this at the front desk. Guests scan it to complete checkout.</p>
+          <p className="muted">Place this at the exit. Guests scan it to complete checkout.</p>
           <QrBlock dataUrl={checkoutQr} label="Checkout QR" />
           <button className="ghost" onClick={regenQr}><QrCode size={15} />Regenerate</button>
         </div>
@@ -1693,6 +1892,7 @@ function GuestApp({ token }) {
   const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState("home");
   const [lang, setLang] = useState("English");
+  const [revoked, setRevoked] = useState(false);
   const { toast, show } = useToast();
 
   async function gReq(path, opts = {}) {
@@ -1720,6 +1920,9 @@ function GuestApp({ token }) {
     const socket = io(API);
     socket.emit("guest:join", payload.booking.id);
     socket.on("messages:new", reload);
+    socket.on("checkin:confirmed", () => reload());
+    socket.on("access:revoked", () => setRevoked(true));
+    socket.on("access:restored", () => setRevoked(false));
     return () => socket.disconnect();
   }, [payload?.booking?.id]);
 
@@ -1756,6 +1959,16 @@ function GuestApp({ token }) {
 
   return (
     <main className="guest-shell">
+      {revoked && (
+        <div className="revoked-overlay">
+          <XCircle size={56} color="var(--red)" />
+          <h2>Access Revoked</h2>
+          <p>Your access has been revoked by the hotel. Please contact the front desk for assistance.</p>
+          <a href={`tel:${booking.reception_phone || "0"}`} className="primary" style={{ textDecoration: "none", marginTop: 8 }}>
+            <PhoneCall size={16} />Call Reception
+          </a>
+        </div>
+      )}
       {booking.cover_photo_url && <div className="guest-cover" style={{ backgroundImage: `url(${booking.cover_photo_url})` }} />}
       <div className="guest-body">
         {tab === "home" && <GuestHome booking={booking} gReq={gReq} show={show} lang={lang} setLang={setLang} />}
@@ -1823,6 +2036,8 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
 function GuestHome({ booking, gReq, show, lang, setLang }) {
   const [checkinQr, setCheckinQr] = useState(null);
   const [loadingQr, setLoadingQr] = useState(false);
+  const [scanningReception, setScanningReception] = useState(false);
+  const [waitingConfirm, setWaitingConfirm] = useState(false);
 
   async function loadQr() {
     setLoadingQr(true);
@@ -1831,7 +2046,10 @@ function GuestHome({ booking, gReq, show, lang, setLang }) {
     setLoadingQr(false);
   }
 
-  useEffect(() => { if (booking.status !== "checked_in") loadQr(); }, []);
+  useEffect(() => { if (booking.status !== "current") loadQr(); }, []);
+
+  // Clear waiting screen when booking status changes to current (checkin confirmed)
+  useEffect(() => { if (booking.status === "current") setWaitingConfirm(false); }, [booking.status]);
 
   useEffect(() => {
     if (!checkinQr?.expires_at) return;
@@ -1840,6 +2058,16 @@ function GuestHome({ booking, gReq, show, lang, setLang }) {
     const tid = setTimeout(loadQr, delay + 1000);
     return () => clearTimeout(tid);
   }, [checkinQr]);
+
+  async function handleReceptionScan(qrData) {
+    setScanningReception(false);
+    const token = qrData.includes("/reception-scan/") ? qrData.split("/reception-scan/").pop() : qrData;
+    try {
+      await gReq("/scan-reception", { method: "POST", body: { receptionToken: token } });
+      setWaitingConfirm(true);
+      show("Reception notified! Please wait.", "success");
+    } catch (err) { show(err.message, "error"); }
+  }
 
   const expiresIn = checkinQr ? Math.max(0, Math.floor((new Date(checkinQr.expires_at) - Date.now()) / 60000)) : null;
 
@@ -1853,10 +2081,22 @@ function GuestHome({ booking, gReq, show, lang, setLang }) {
         <p className="dates">{t(lang, "checkIn")}: {fmtDate(booking.check_in)} &nbsp;·&nbsp; {t(lang, "checkOut")}: {fmtDate(booking.check_out)}</p>
       </div>
 
-      {booking.status !== "checked_in" ? (
+      {booking.status === "current" ? (
+        <div className="checkin-badge">
+          <CheckCircle size={36} />
+          <strong>{t(lang, "checkInConfirmed")}</strong>
+          <p className="muted" style={{ fontSize: 13 }}>Welcome! Your room is ready.</p>
+        </div>
+      ) : waitingConfirm ? (
+        <div className="waiting-screen">
+          <div className="waiting-spinner" />
+          <h3>Reception Notified</h3>
+          <p>Please wait at the front desk. Staff will confirm your check-in shortly.</p>
+        </div>
+      ) : (
         <div className="checkin-section">
           <h2>{t(lang, "checkInReady")}</h2>
-          <p className="muted">Show this QR to reception. Refreshes automatically every 15 minutes.</p>
+          <p className="muted">Option 1: Show this QR to reception staff.</p>
           {checkinQr ? (
             <div className="checkin-qr">
               <QrBlock dataUrl={checkinQr.qr_data_url} label={`Valid ${expiresIn} min`} />
@@ -1867,11 +2107,14 @@ function GuestHome({ booking, gReq, show, lang, setLang }) {
               <QrCode size={18} />{loadingQr ? "Loading…" : t(lang, "scanQr")}
             </button>
           )}
-        </div>
-      ) : (
-        <div className="checkin-badge">
-          <CheckCircle size={36} />
-          <strong>{t(lang, "checkInConfirmed")}</strong>
+          <div className="reception-scan-section">
+            <h3>Option 2: Scan hotel reception QR</h3>
+            <p className="muted" style={{ fontSize: 12 }}>Point your camera at the QR code displayed at the front desk.</p>
+            <button className="primary" onClick={() => setScanningReception(true)}>
+              <QrCode size={18} />Scan Reception QR
+            </button>
+          </div>
+          {scanningReception && <QrScanner onScan={handleReceptionScan} onClose={() => setScanningReception(false)} />}
         </div>
       )}
 

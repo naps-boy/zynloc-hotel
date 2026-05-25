@@ -1,9 +1,12 @@
 import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { query, withTransaction } from "../db/pool.js";
 import { requireAuth, signSession } from "../middleware/auth.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
+import { config } from "../config.js";
+import { sendPasswordResetEmail } from "../services/email.js";
 
 export const authRouter = Router();
 
@@ -48,6 +51,39 @@ authRouter.post("/login", asyncHandler(async (req, res) => {
 
   delete validStaff.password_hash;
   res.json({ staff: validStaff, token: signSession(validStaff) });
+}));
+
+// POST /api/auth/forgot-password — send reset link (always returns 200 to avoid email enumeration)
+authRouter.post("/forgot-password", asyncHandler(async (req, res) => {
+  const { email } = z.object({ email: z.string().email() }).parse(req.body);
+  const { rows } = await query("SELECT * FROM staff WHERE email = $1", [email.toLowerCase()]);
+  if (rows.length) {
+    const staff = rows[0];
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    await query(
+      "INSERT INTO password_reset_tokens (staff_id, token, expires_at) VALUES ($1, $2, $3)",
+      [staff.id, token, expiresAt]
+    );
+    const resetLink = `${config.clientUrl}/reset-password?token=${token}`;
+    await sendPasswordResetEmail({ staffEmail: staff.email, staffName: staff.name, hotelId: staff.hotel_id, resetLink });
+  }
+  res.json({ ok: true });
+}));
+
+// POST /api/auth/reset-password — validate token and set new password
+authRouter.post("/reset-password", asyncHandler(async (req, res) => {
+  const { token, password } = z.object({ token: z.string(), password: z.string().min(8) }).parse(req.body);
+  const { rows } = await query(
+    `SELECT prt.id, prt.staff_id FROM password_reset_tokens prt
+      WHERE prt.token = $1 AND prt.used_at IS NULL AND prt.expires_at > NOW()`,
+    [token]
+  );
+  if (!rows.length) throw new HttpError(400, "Reset link is invalid or has expired");
+  const { id: tokenId, staff_id } = rows[0];
+  await query("UPDATE staff SET password_hash = $1 WHERE id = $2", [await bcrypt.hash(password, 12), staff_id]);
+  await query("UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1", [tokenId]);
+  res.json({ ok: true });
 }));
 
 authRouter.get("/me", requireAuth, asyncHandler(async (req, res) => {

@@ -69,12 +69,38 @@ export async function ensureCheckoutQr(hotelId) {
   return rows[0];
 }
 
+// ─── Rotating reception QR (shown at front desk, 30-min window) ──────────────
+export async function ensureReceptionQr(hotelId) {
+  const { rows } = await query(
+    "SELECT reception_token, reception_token_expires_at FROM hotels WHERE id = $1",
+    [hotelId]
+  );
+  const hotel = rows[0];
+  const expired = !hotel?.reception_token || new Date(hotel.reception_token_expires_at) < new Date();
+
+  if (!expired) {
+    const url = `${config.clientUrl}/reception-scan/${hotel.reception_token}`;
+    const qrDataUrl = await QRCode.toDataURL(url, QR_OPTS);
+    return { token: hotel.reception_token, expires_at: hotel.reception_token_expires_at, qr_data_url: qrDataUrl };
+  }
+
+  const token = crypto.randomBytes(24).toString("base64url");
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  const url = `${config.clientUrl}/reception-scan/${token}`;
+  const qrDataUrl = await QRCode.toDataURL(url, QR_OPTS);
+  await query(
+    "UPDATE hotels SET reception_token = $1, reception_token_expires_at = $2 WHERE id = $3",
+    [token, expiresAt, hotelId]
+  );
+  return { token, expires_at: expiresAt, qr_data_url: qrDataUrl };
+}
+
 // ─── Resolve access token → booking payload ──────────────────────────────────
 export async function getQrPayload(token) {
   const { rows } = await query(
     `SELECT q.*, q.id qr_id,
             b.id booking_id, b.package_type, b.check_in, b.check_out, b.status,
-            b.profile_status, b.special_notes, b.guest_phone, b.checkin_token,
+            b.revoked, b.profile_status, b.special_notes, b.guest_phone, b.checkin_token,
             b.checkin_token_expires_at, b.package_id,
             g.id guest_id, g.name guest_name, g.email guest_email,
             g.current_location, g.selfie_url, g.profile_complete,

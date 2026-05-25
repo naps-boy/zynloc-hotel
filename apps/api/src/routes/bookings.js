@@ -3,7 +3,7 @@ import { z } from "zod";
 import { query } from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createBookingFromDraft } from "../services/bookings.js";
-import { emitHotel } from "../services/realtime.js";
+import { emitHotel, emitBooking } from "../services/realtime.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
 import { sendBookingConfirmation } from "../services/email.js";
 import { query as dbQuery } from "../db/pool.js";
@@ -105,6 +105,30 @@ bookingsRouter.post("/scan-checkin", asyncHandler(async (req, res) => {
     throw new HttpError(410, "QR has expired — ask guest to refresh their app");
   }
   res.json(b);
+}));
+
+// Revoke guest access immediately
+bookingsRouter.post("/:id/revoke", asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    "UPDATE bookings SET revoked = TRUE WHERE id = $1 AND hotel_id = $2 RETURNING *",
+    [req.params.id, req.user.hotelId]
+  );
+  if (!rows.length) throw new HttpError(404, "Booking not found");
+  emitBooking(req.params.id, "access:revoked", { bookingId: req.params.id });
+  emitHotel(req.user.hotelId, "bookings:changed", rows[0]);
+  res.json(rows[0]);
+}));
+
+// Restore revoked access
+bookingsRouter.post("/:id/restore", asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    "UPDATE bookings SET revoked = FALSE WHERE id = $1 AND hotel_id = $2 RETURNING *",
+    [req.params.id, req.user.hotelId]
+  );
+  if (!rows.length) throw new HttpError(404, "Booking not found");
+  emitBooking(req.params.id, "access:restored", { bookingId: req.params.id });
+  emitHotel(req.user.hotelId, "bookings:changed", rows[0]);
+  res.json(rows[0]);
 }));
 
 bookingsRouter.put("/:id", asyncHandler(async (req, res) => {

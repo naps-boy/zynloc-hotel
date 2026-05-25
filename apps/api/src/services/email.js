@@ -293,6 +293,28 @@ export async function sendCheckoutReceipt({ guest, hotel, booking }) {
   });
 }
 
+export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, resetLink }) {
+  await send({
+    hotelId,
+    to: staffEmail,
+    subject: "Zynloc Hotel — Password Reset",
+    html: `
+<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
+<div style="max-width:480px;margin:auto;background:#162235;border-radius:16px;padding:32px;text-align:center">
+  <h2 style="color:#d8a84f;margin:0 0 12px">Password Reset</h2>
+  <p style="color:#9aa6b2;margin:0 0 20px">Hi ${staffName},<br>
+  Click below to reset your Zynloc Hotel password. This link expires in 1 hour.</p>
+  <a href="${resetLink}"
+     style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:700;text-decoration:none">
+    Reset Password →
+  </a>
+  <p style="color:#4a5568;font-size:11px;margin:20px 0 0">
+    If you didn't request this, ignore this email.<br>${resetLink}
+  </p>
+</div></body></html>`,
+  });
+}
+
 export async function sendVerificationRequest({ guest, hotel }) {
   const link = `${config.clientUrl}/guest/${guest.access_token}`;
   await send({

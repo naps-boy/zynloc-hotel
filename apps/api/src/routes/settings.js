@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { query } from "../db/pool.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
-import { ensureCheckoutQr, ensureFacilityQr } from "../services/qr.js";
+import { ensureCheckoutQr, ensureFacilityQr, ensureReceptionQr } from "../services/qr.js";
 import { asyncHandler } from "../utils/http.js";
 
 export const settingsRouter = Router();
@@ -52,6 +52,12 @@ settingsRouter.put("/", requireRole("manager"), asyncHandler(async (req, res) =>
 settingsRouter.post("/checkout-qr", requireRole("manager"), asyncHandler(async (req, res) => {
   await query("DELETE FROM checkout_qr_codes WHERE hotel_id = $1", [req.user.hotelId]);
   const qr = await ensureCheckoutQr(req.user.hotelId);
+  res.json(qr);
+}));
+
+// Get (or generate) the rotating reception QR — rotates every 30 min
+settingsRouter.get("/reception-qr", asyncHandler(async (req, res) => {
+  const qr = await ensureReceptionQr(req.user.hotelId);
   res.json(qr);
 }));
 

@@ -118,6 +118,40 @@ button.ghost.danger{color:var(--red);border-color:var(--red)}.ghost.danger:hover
 .zoom-badge{position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,.6);border-radius:4px;padding:3px 6px;display:flex;align-items:center;color:#fff;pointer-events:none;opacity:0;transition:opacity .2s}
 .zoom-wrap:hover .zoom-badge{opacity:1}
 .lightbox-overlay{position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px}
-.lightbox-img{max-width:90vw;max-height:90vh;object-fit:contain;border-radius:10px;cursor:default;box-shadow:0 8px 48px rgba(0,0,0,.7)}
+.lightbox-img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:10px;cursor:default;box-shadow:0 8px 48px rgba(0,0,0,.7)}
 .lightbox-close{position:fixed;top:18px;right:18px;background:rgba(255,255,255,.15);backdrop-filter:blur(4px);color:#fff;border-radius:50%;width:42px;height:42px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:none;transition:background .15s;flex-shrink:0}
 .lightbox-close:hover{background:rgba(255,255,255,.28)}
+/* ── Revoke / restore ───────────────────────────────────────────────── */
+.pill.revoked{background:rgba(239,95,95,.18);color:var(--red)}
+.revoke-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:600;background:rgba(239,95,95,.12);border:1px solid rgba(239,95,95,.3);color:var(--red);cursor:pointer;transition:background .15s}
+.revoke-btn:hover{background:rgba(239,95,95,.22)}
+.restore-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:600;background:rgba(38,194,129,.1);border:1px solid rgba(38,194,129,.3);color:var(--green);cursor:pointer;transition:background .15s}
+.restore-btn:hover{background:rgba(38,194,129,.18)}
+/* ── Guest arrived alert ────────────────────────────────────────────── */
+.arrival-card{background:rgba(216,168,79,.08);border:1px solid rgba(216,168,79,.4);border-radius:var(--radius);padding:12px;display:flex;flex-direction:column;gap:8px}
+.arrival-card-header{display:flex;align-items:center;gap:8px}
+.arrival-photo{width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--gold);flex-shrink:0}
+.arrival-no-photo{width:40px;height:40px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--muted)}
+.arrival-info strong{display:block;font-size:13px}
+.arrival-info small{font-size:11px;color:var(--muted)}
+.arrival-confirm-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--green);color:#fff;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:background .15s}
+.arrival-confirm-btn:hover{background:#1ea86e}
+.arrival-dismiss-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:6px;background:transparent;color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;border:1px solid var(--border);transition:background .15s;margin-top:2px}
+.arrival-dismiss-btn:hover{background:var(--bg3)}
+/* ── Guest waiting screen ───────────────────────────────────────────── */
+.reception-scan-section{padding:16px 0;border-top:1px solid var(--border);margin-top:8px;display:flex;flex-direction:column;gap:8px}
+.reception-scan-section h3{font-size:14px;font-weight:600;color:var(--muted)}
+.waiting-screen{display:flex;flex-direction:column;align-items:center;gap:16px;padding:32px 20px;text-align:center}
+.waiting-spinner{width:48px;height:48px;border-radius:50%;border:4px solid var(--border);border-top-color:var(--gold);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.waiting-screen h3{font-size:18px;font-weight:700;color:var(--gold)}
+.waiting-screen p{color:var(--muted);font-size:14px}
+/* ── Revoked overlay ────────────────────────────────────────────────── */
+.revoked-overlay{position:fixed;inset:0;z-index:500;background:rgba(13,27,42,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center}
+.revoked-overlay h2{font-size:22px;font-weight:800;color:var(--red)}
+.revoked-overlay p{color:var(--muted);font-size:15px;max-width:320px}
+/* ── Guest search ───────────────────────────────────────────────────── */
+.guest-search{position:relative;margin-bottom:4px}.guest-search input{padding-left:36px}.guest-search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+/* ── Forgot/reset password ──────────────────────────────────────────── */
+.forgot-link{background:transparent;color:var(--muted);font-size:12px;padding:2px 0;text-decoration:underline;text-underline-offset:2px;cursor:pointer;border:none;align-self:flex-start}
+.forgot-link:hover{color:var(--gold)}
