@@ -56,7 +56,12 @@ authRouter.post("/login", asyncHandler(async (req, res) => {
 // POST /api/auth/forgot-password — send reset link (always returns 200 to avoid email enumeration)
 authRouter.post("/forgot-password", asyncHandler(async (req, res) => {
   const { email } = z.object({ email: z.string().email() }).parse(req.body);
-  const { rows } = await query("SELECT * FROM staff WHERE email = $1", [email.toLowerCase()]);
+  const lookupEmail = email.toLowerCase();
+  console.log(`[ForgotPw] Request received for: ${lookupEmail}`);
+
+  const { rows } = await query("SELECT id, hotel_id, name, email FROM staff WHERE email = $1", [lookupEmail]);
+  console.log(`[ForgotPw] Staff lookup — found: ${rows.length > 0}${rows.length ? ` (hotel_id=${rows[0].hotel_id})` : ""}`);
+
   if (rows.length) {
     const staff = rows[0];
     const token = crypto.randomBytes(32).toString("base64url");
@@ -65,8 +70,12 @@ authRouter.post("/forgot-password", asyncHandler(async (req, res) => {
       "INSERT INTO password_reset_tokens (staff_id, token, expires_at) VALUES ($1, $2, $3)",
       [staff.id, token, expiresAt]
     );
+    console.log(`[ForgotPw] Token saved. Sending reset email to ${staff.email}`);
     const resetLink = `${config.clientUrl}/reset-password?token=${token}`;
     await sendPasswordResetEmail({ staffEmail: staff.email, staffName: staff.name, hotelId: staff.hotel_id, resetLink });
+    console.log(`[ForgotPw] sendPasswordResetEmail returned for ${staff.email}`);
+  } else {
+    console.log(`[ForgotPw] No staff account found for: ${lookupEmail} — no email sent`);
   }
   res.json({ ok: true });
 }));

@@ -294,11 +294,18 @@ export async function sendCheckoutReceipt({ guest, hotel, booking }) {
 }
 
 export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, resetLink }) {
-  await send({
-    hotelId,
-    to: staffEmail,
-    subject: "Zynloc Hotel — Password Reset",
-    html: `
+  // Bypass the silent-fail send() wrapper so every step is fully visible in logs.
+  console.log(`[PasswordReset] Fetching SMTP config for hotel ${hotelId}`);
+  const smtpCfg = await getHotelSmtpConfig(hotelId);
+
+  if (!smtpCfg) {
+    console.error(`[PasswordReset] FATAL: no SMTP config (is_default=TRUE) found for hotel ${hotelId}. Cannot send reset email to ${staffEmail}.`);
+    return;
+  }
+
+  console.log(`[PasswordReset] SMTP config found — provider=${smtpCfg.provider}, sender=${smtpCfg.email}`);
+
+  const html = `
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;color:#e2e8f0;padding:32px">
 <div style="max-width:480px;margin:auto;background:#162235;border-radius:16px;padding:32px;text-align:center">
   <h2 style="color:#d8a84f;margin:0 0 12px">Password Reset</h2>
@@ -311,8 +318,28 @@ export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, r
   <p style="color:#4a5568;font-size:11px;margin:20px 0 0">
     If you didn't request this, ignore this email.<br>${resetLink}
   </p>
-</div></body></html>`,
-  });
+</div></body></html>`;
+
+  const mailOpts = {
+    from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
+    to:      staffEmail,
+    subject: "Zynloc Hotel — Password Reset",
+    html,
+  };
+
+  console.log(`[PasswordReset] Sending to ${staffEmail} via provider=${smtpCfg.provider}`);
+
+  try {
+    if (smtpCfg.provider === "brevo") {
+      const result = await sendViaBrevo(smtpCfg, mailOpts);
+      console.log(`[PasswordReset] Brevo success — messageId=${result.messageId}`);
+    } else {
+      const info = await createSmtpTransporter(smtpCfg).sendMail(mailOpts);
+      console.log(`[PasswordReset] SMTP success — messageId=${info.messageId}`);
+    }
+  } catch (err) {
+    console.error(`[PasswordReset] Send FAILED for ${staffEmail}:`, err.message);
+  }
 }
 
 export async function sendVerificationRequest({ guest, hotel }) {
