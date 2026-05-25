@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { Html5Qrcode } from "html5-qrcode";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid,
   ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -318,10 +319,10 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 }
 
 // ── QrScanner ─────────────────────────────────────────────────────────────────
-// Uses <input type="file" capture="environment"> — opens the native back camera
-// on iOS/Android WITHOUT any browser permission prompt. No getUserMedia. No
-// BarcodeDetector. Works on every phone without changing any browser settings.
-// On desktop the capture attribute is ignored and a file picker opens instead.
+// Uses Html5Qrcode.scanFile() + <input capture="environment">.
+// capture="environment" opens the native back camera on iOS/Android with zero
+// browser permission prompts. Html5Qrcode.scanFile() handles large HEIC photos,
+// image scaling, and correct canvas timing — fixing all issues jsQR had.
 
 function QrScanner({ onScan, onClose }) {
   const [error, setError] = useState(null);
@@ -330,37 +331,21 @@ function QrScanner({ onScan, onClose }) {
   async function decodeFile(file) {
     setError(null);
     setProcessing(true);
+    const scanner = new Html5Qrcode("qr-reader-hidden");
     try {
-      const { default: jsQR } = await import("jsqr");
-      const dataUrl = await new Promise((res, rej) => {
-        const reader = new FileReader();
-        reader.onload = e => res(e.target.result);
-        reader.onerror = rej;
-        reader.readAsDataURL(file);
-      });
-      const img = new Image();
-      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext("2d").drawImage(img, 0, 0);
-      const { data, width, height } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(data, width, height);
-      if (code?.data) {
-        onScan(code.data);  // success — parent unmounts us
-      } else {
-        setError("QR not detected — hold the camera steady and try again.");
-        setProcessing(false);
-      }
+      const result = await scanner.scanFile(file, /* showImage= */ false);
+      onScan(result);  // success — parent unmounts this component
     } catch {
-      setError("Could not read the image — please try again.");
+      setError("QR code not detected. Make sure the QR code is clear and well-lit, then try again.");
       setProcessing(false);
+    } finally {
+      try { scanner.clear(); } catch {}
     }
   }
 
   function handleChange(e) {
     const file = e.target.files?.[0];
-    e.target.value = "";  // reset so the same file can trigger onChange again
+    e.target.value = "";  // reset so same file can be re-selected on retry
     if (file) decodeFile(file);
   }
 
@@ -373,16 +358,17 @@ function QrScanner({ onScan, onClose }) {
       ) : (
         <div className="qr-file-btns">
           {error && <p className="qr-error">{error}</p>}
-          {/* Primary: opens native back camera on phone — no permission prompt */}
+          {/* Primary: opens native back camera on iOS/Android — no permission prompt */}
           <label className="qr-capture-label">
-            <Camera size={20} /><span>Scan QR Code</span>
+            <Camera size={20} /><span>Take Photo of QR Code</span>
             <input type="file" accept="image/*" capture="environment" onChange={handleChange} />
           </label>
-          {/* Fallback: gallery / file system / screenshot */}
+          {/* Secondary: gallery / screenshot / file system */}
           <label className="qr-upload-label">
-            <Upload size={18} /><span>Upload QR Image</span>
+            <Upload size={18} /><span>Upload from Gallery</span>
             <input type="file" accept="image/*" onChange={handleChange} />
           </label>
+          <button className="ghost" style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.25)", marginTop: 4 }} onClick={onClose}>Cancel</button>
         </div>
       )}
       <p className="qr-hint">Take a photo of the QR code or upload a screenshot</p>
