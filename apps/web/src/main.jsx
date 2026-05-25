@@ -431,6 +431,7 @@ function Login({ api }) {
       <section className="auth-panel">
         <div className="brand-lockup"><Hotel size={28} /><span>Zynloc Hotel</span></div>
         <h1>{mode === "login" ? "Manager Login" : mode === "register" ? "Create Hotel" : "Reset Password"}</h1>
+        {mode === "forgot" && <p className="auth-hint">Enter the email address you use to <strong>log in to Zynloc</strong> — not your email sender address.</p>}
         <form onSubmit={submit} className="stack">
           {mode === "register" && (
             <>
@@ -438,7 +439,7 @@ function Login({ api }) {
               <input placeholder="Your name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
             </>
           )}
-          <input type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          <input type="email" placeholder={mode === "forgot" ? "Your Zynloc login email" : "Email"} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
           {mode !== "forgot" && (
             <input type="password" placeholder="Password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
           )}

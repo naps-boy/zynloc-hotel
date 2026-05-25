@@ -155,3 +155,4 @@ button.ghost.danger{color:var(--red);border-color:var(--red)}.ghost.danger:hover
 /* ── Forgot/reset password ──────────────────────────────────────────── */
 .forgot-link{background:transparent;color:var(--muted);font-size:12px;padding:2px 0;text-decoration:underline;text-underline-offset:2px;cursor:pointer;border:none;align-self:flex-start}
 .forgot-link:hover{color:var(--gold)}
+.auth-hint{color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 4px;text-align:center}.auth-hint strong{color:var(--gold)}
