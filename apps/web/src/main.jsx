@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { Scanner } from "@yudiel/react-qr-scanner";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid,
   ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -319,48 +318,74 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 }
 
 // ── QrScanner ─────────────────────────────────────────────────────────────────
-// Uses @yudiel/react-qr-scanner which opens the camera automatically and handles
-// permission prompts, BarcodeDetector API fallback, and iOS/Android quirks.
+// Uses <input type="file" capture="environment"> — opens the native back camera
+// on iOS/Android WITHOUT any browser permission prompt. No getUserMedia. No
+// BarcodeDetector. Works on every phone without changing any browser settings.
+// On desktop the capture attribute is ignored and a file picker opens instead.
 
 function QrScanner({ onScan, onClose }) {
-  const [permError, setPermError] = useState(null);
+  const [error, setError] = useState(null);
+  const [processing, setProcessing] = useState(false);
 
-  function handleScan(detectedCodes) {
-    const raw = detectedCodes?.[0]?.rawValue;
-    if (raw) onScan(raw);
+  async function decodeFile(file) {
+    setError(null);
+    setProcessing(true);
+    try {
+      const { default: jsQR } = await import("jsqr");
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = e => res(e.target.result);
+        reader.onerror = rej;
+        reader.readAsDataURL(file);
+      });
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      const { data, width, height } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(data, width, height);
+      if (code?.data) {
+        onScan(code.data);  // success — parent unmounts us
+      } else {
+        setError("QR not detected — hold the camera steady and try again.");
+        setProcessing(false);
+      }
+    } catch {
+      setError("Could not read the image — please try again.");
+      setProcessing(false);
+    }
   }
 
-  function handleError(err) {
-    const msg = String(err?.message || err || "");
-    if (/permission|notallowed|denied/i.test(msg)) {
-      setPermError("Camera access was denied. Please allow camera permission in your browser settings, then try again.");
-    } else if (/notfound|devices|nomedia/i.test(msg)) {
-      setPermError("No camera found on this device. Ask staff to look up your booking manually.");
-    } else {
-      setPermError(msg || "Camera unavailable — please try again.");
-    }
+  function handleChange(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";  // reset so the same file can trigger onChange again
+    if (file) decodeFile(file);
   }
 
   return (
     <div className="qr-scanner-shell">
       <button className="close-camera" onClick={onClose}><X size={24} /></button>
-      {permError ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16, alignItems: "center", padding: "0 28px", textAlign: "center" }}>
-          <p style={{ color: "#fff", fontSize: 15, lineHeight: 1.6 }}>{permError}</p>
-          <button className="ghost" style={{ color: "#fff", borderColor: "rgba(255,255,255,.35)" }} onClick={onClose}>Close</button>
-        </div>
+      <QrCode size={52} style={{ color: "var(--gold)", flexShrink: 0 }} />
+      {processing ? (
+        <p className="qr-hint">Reading QR code…</p>
       ) : (
-        <Scanner
-          onScan={handleScan}
-          onError={handleError}
-          constraints={{ facingMode: "environment" }}
-          styles={{
-            container: { width: "min(90vw, 300px)", height: "min(90vw, 300px)", borderRadius: 12, overflow: "hidden" },
-            video:     { width: "100%", height: "100%", objectFit: "cover" },
-          }}
-        />
+        <div className="qr-file-btns">
+          {error && <p className="qr-error">{error}</p>}
+          {/* Primary: opens native back camera on phone — no permission prompt */}
+          <label className="qr-capture-label">
+            <Camera size={20} /><span>Scan QR Code</span>
+            <input type="file" accept="image/*" capture="environment" onChange={handleChange} />
+          </label>
+          {/* Fallback: gallery / file system / screenshot */}
+          <label className="qr-upload-label">
+            <Upload size={18} /><span>Upload QR Image</span>
+            <input type="file" accept="image/*" onChange={handleChange} />
+          </label>
+        </div>
       )}
-      <p className="qr-hint">Point camera at QR code</p>
+      <p className="qr-hint">Take a photo of the QR code or upload a screenshot</p>
     </div>
   );
 }
