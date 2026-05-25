@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { Scanner } from "@yudiel/react-qr-scanner";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid,
   ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -303,72 +305,62 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
     <div className={`zoom-wrap${block ? " zoom-wrap-block" : ""}`} onClick={() => setOpen(true)}>
       <img src={src} alt={alt} className={className} />
       <div className="zoom-badge"><ZoomIn size={12} /></div>
-      {open && (
-        <div className="lightbox-overlay" onClick={e => { e.stopPropagation(); setOpen(false); }}>
+      {open && createPortal(
+        <div className="lightbox-overlay" onClick={() => setOpen(false)}>
           <img src={src} alt={alt} className="lightbox-img" onClick={e => e.stopPropagation()} />
-          <button className="lightbox-close" onClick={e => { e.stopPropagation(); setOpen(false); }}>
+          <button className="lightbox-close" onClick={() => setOpen(false)}>
             <X size={22} />
           </button>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
 }
 
 // ── QrScanner ─────────────────────────────────────────────────────────────────
+// Uses @yudiel/react-qr-scanner which opens the camera automatically and handles
+// permission prompts, BarcodeDetector API fallback, and iOS/Android quirks.
 
 function QrScanner({ onScan, onClose }) {
-  const videoRef = useRef(null);
-  const rafRef = useRef(null);
-  const streamRef = useRef(null);
+  const [permError, setPermError] = useState(null);
 
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const jsQRmod = await import("jsqr");
-      const jsQR = jsQRmod.default;
-      try {
-        streamRef.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
-      } catch {
-        streamRef.current = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      }
-      if (!active) { streamRef.current.getTracks().forEach(t => t.stop()); return; }
-      videoRef.current.srcObject = streamRef.current;
-      await videoRef.current.play();
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      function tick() {
-        if (!active || !videoRef.current) return;
-        if (videoRef.current.readyState === 4) {
-          canvas.width = videoRef.current.videoWidth;
-          canvas.height = videoRef.current.videoHeight;
-          ctx.drawImage(videoRef.current, 0, 0);
-          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(img.data, img.width, img.height);
-          if (code?.data) {
-            streamRef.current.getTracks().forEach(t => t.stop());
-            active = false;
-            onScan(code.data);
-            return;
-          }
-        }
-        rafRef.current = requestAnimationFrame(tick);
-      }
-      rafRef.current = requestAnimationFrame(tick);
-    })();
-    return () => {
-      active = false;
-      cancelAnimationFrame(rafRef.current);
-      streamRef.current?.getTracks().forEach(t => t.stop());
-    };
-  }, []);
+  function handleScan(detectedCodes) {
+    const raw = detectedCodes?.[0]?.rawValue;
+    if (raw) onScan(raw);
+  }
+
+  function handleError(err) {
+    const msg = String(err?.message || err || "");
+    if (/permission|notallowed|denied/i.test(msg)) {
+      setPermError("Camera access was denied. Please allow camera permission in your browser settings, then try again.");
+    } else if (/notfound|devices|nomedia/i.test(msg)) {
+      setPermError("No camera found on this device. Ask staff to look up your booking manually.");
+    } else {
+      setPermError(msg || "Camera unavailable — please try again.");
+    }
+  }
 
   return (
-    <div className="qr-scanner-overlay">
-      <button className="scanner-close" onClick={onClose}><X size={24} /></button>
-      <video ref={videoRef} autoPlay playsInline muted className="scanner-video" />
-      <div className="scanner-frame" />
-      <p className="scanner-hint">Point camera at QR code</p>
+    <div className="qr-scanner-shell">
+      <button className="close-camera" onClick={onClose}><X size={24} /></button>
+      {permError ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, alignItems: "center", padding: "0 28px", textAlign: "center" }}>
+          <p style={{ color: "#fff", fontSize: 15, lineHeight: 1.6 }}>{permError}</p>
+          <button className="ghost" style={{ color: "#fff", borderColor: "rgba(255,255,255,.35)" }} onClick={onClose}>Close</button>
+        </div>
+      ) : (
+        <Scanner
+          onScan={handleScan}
+          onError={handleError}
+          constraints={{ facingMode: "environment" }}
+          styles={{
+            container: { width: "min(90vw, 300px)", height: "min(90vw, 300px)", borderRadius: 12, overflow: "hidden" },
+            video:     { width: "100%", height: "100%", objectFit: "cover" },
+          }}
+        />
+      )}
+      <p className="qr-hint">Point camera at QR code</p>
     </div>
   );
 }

@@ -117,9 +117,9 @@ button.ghost.danger{color:var(--red);border-color:var(--red)}.ghost.danger:hover
 .zoom-wrap-block{display:block}
 .zoom-badge{position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,.6);border-radius:4px;padding:3px 6px;display:flex;align-items:center;color:#fff;pointer-events:none;opacity:0;transition:opacity .2s}
 .zoom-wrap:hover .zoom-badge{opacity:1}
-.lightbox-overlay{position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px}
-.lightbox-img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:10px;cursor:default;box-shadow:0 8px 48px rgba(0,0,0,.7)}
-.lightbox-close{position:fixed;top:18px;right:18px;background:rgba(255,255,255,.15);backdrop-filter:blur(4px);color:#fff;border-radius:50%;width:42px;height:42px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:none;transition:background .15s;flex-shrink:0}
+.lightbox-overlay{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+.lightbox-img{position:relative;z-index:1001;max-width:95vw;max-height:95vh;object-fit:contain;display:block;margin:auto;border-radius:10px;cursor:default;box-shadow:0 8px 48px rgba(0,0,0,.7)}
+.lightbox-close{position:fixed;top:18px;right:18px;z-index:1002;background:rgba(255,255,255,.15);backdrop-filter:blur(4px);color:#fff;border-radius:50%;width:42px;height:42px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:none;transition:background .15s}
 .lightbox-close:hover{background:rgba(255,255,255,.28)}
 /* ── Revoke / restore ───────────────────────────────────────────────── */
 .pill.revoked{background:rgba(239,95,95,.18);color:var(--red)}
