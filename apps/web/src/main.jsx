@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { t, LANGUAGES } from "./lib/i18n.js";
-import { loadFaceModels, extractDescriptorFromDataUrl, compareDescriptors } from "./lib/face.js";
 import { findPath } from "./lib/dijkstra.js";
 import "./styles.css";
 
@@ -697,7 +696,6 @@ function ManagerDashboard({ api, initialSettings }) {
     messages: [], notifications: [], analytics: null, settings: initialSettings,
     staff: [], accessLog: [], serviceRequests: []
   });
-  const [verifyReq, setVerifyReq] = useState(null);
   const { toast, show } = useToast();
 
   const NAV = [
@@ -784,8 +782,6 @@ function ManagerDashboard({ api, initialSettings }) {
     ["rooms:changed","bookings:changed","messages:new","notifications:new",
      "service-requests:new","service-requests:changed"].forEach(ev => socket.on(ev, doLoad));
     socket.on("access:denied", ev => show(`Access denied: ${ev.guestName} at ${ev.facilityName}`, "warning"));
-    // verification:result is emitted by backend after the guest submits their live selfie comparison
-    socket.on("verification:result", ev => { setVerifyReq(ev); show(`Verification: ${ev.guestName} — ${ev.verified ? "✓ Verified" : "✗ Failed"}`, ev.verified ? "success" : "warning"); });
     return () => socket.disconnect();
   }, [me?.hotel_id]);
 
@@ -861,10 +857,6 @@ function ManagerDashboard({ api, initialSettings }) {
           </button>
         ))}
       </nav>
-
-      <Modal open={!!verifyReq} onClose={() => setVerifyReq(null)}>
-        {verifyReq && <VerificationPanel req={verifyReq} onDone={() => { setVerifyReq(null); loadAll(); }} />}
-      </Modal>
 
       <Toast toast={toast} />
     </main>
@@ -947,6 +939,9 @@ function MgrBookings({ api, data, reload, show }) {
   const [form, setForm] = useState({ guestName: "", guestEmail: "", guestPhone: "", roomId: "", packageId: "", checkIn: "", checkOut: "", specialNotes: "" });
   const [created, setCreated] = useState(null);
   const [resending, setResending] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [checkinData, setCheckinData] = useState(null);
+  const [confirming, setConfirming] = useState(false);
 
   async function create(e) {
     e.preventDefault();
@@ -963,6 +958,33 @@ function MgrBookings({ api, data, reload, show }) {
     try { await api.request(`/api/bookings/${id}/resend-email`, { method: "POST" }); show("Email resent", "success"); }
     catch (err) { show(err.message, "error"); }
     setResending(null);
+  }
+
+  async function handleCheckinScan(qrData) {
+    setScanning(false);
+    // QR encodes a URL like .../checkin-scan/TOKEN — extract last segment
+    const token = qrData.includes("/") ? qrData.split("/").pop() : qrData;
+    try {
+      const b = await api.request("/api/bookings/scan-checkin", { method: "POST", body: JSON.stringify({ token }) });
+      setCheckinData(b);
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function confirmCheckin() {
+    if (!checkinData?.qr_token) return;
+    setConfirming(true);
+    try {
+      await fetch(`${API}/api/guest/${checkinData.qr_token}/checkin`, { method: "POST" });
+      show(`${checkinData.guest_name} checked in to Room ${checkinData.room_number} ✓`, "success");
+      setCheckinData(null);
+      reload();
+    } catch (err) { show(err.message, "error"); }
+    setConfirming(false);
+  }
+
+  function flagIssue() {
+    show(`Issue flagged for ${checkinData?.guest_name} — Room ${checkinData?.room_number}`, "warning");
+    setCheckinData(null);
   }
 
   return (
@@ -994,10 +1016,38 @@ function MgrBookings({ api, data, reload, show }) {
           </div>
         )}
       </form>
+
       <div className="stack">
+        {/* Check-in QR scanner */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <button className="primary sm" onClick={() => setScanning(true)}>
+            <QrCode size={16} />Scan Guest QR
+          </button>
+          <span className="muted" style={{ fontSize: 12 }}>Tap to scan a guest's check-in QR</span>
+        </div>
+
+        {/* Check-in confirmation panel */}
+        {checkinData && (
+          <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+            <CheckinConfirmPanel
+              booking={checkinData}
+              onConfirm={confirmCheckin}
+              onFlag={flagIssue}
+              onClose={() => setCheckinData(null)}
+              confirming={confirming}
+            />
+          </div>
+        )}
+
         <div className="table">
           {data.bookings.map(b => (
             <div className="row booking-row" key={b.id}>
+              <div className="guest-avatar" style={{ width: 36, height: 36, flexShrink: 0 }}>
+                {b.selfie_url
+                  ? <img src={b.selfie_url} alt={b.guest_name} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+                  : <span>{b.guest_name?.[0] || "?"}</span>
+                }
+              </div>
               <div><strong>{b.guest_name}</strong><small>{b.guest_email}</small></div>
               <span>Room {b.room_number}</span>
               <span className={`pill ${b.status}`}>{b.status}</span>
@@ -1014,19 +1064,13 @@ function MgrBookings({ api, data, reload, show }) {
           {!data.bookings.length && <p className="muted">No bookings yet</p>}
         </div>
       </div>
+
+      {scanning && <QrScanner onScan={handleCheckinScan} onClose={() => setScanning(false)} />}
     </section>
   );
 }
 
 function MgrGuests({ api, data, reload, show }) {
-  async function requestVerify(guestId) {
-    const booking = data.bookings.find(b => b.guest_id === guestId);
-    if (!booking?.qr_token) { show("No booking token found", "error"); return; }
-    try {
-      await api.request(`/api/guest/${booking.qr_token}/request-verification`, { method: "POST" });
-      show("Verification requested", "success");
-    } catch (err) { show(err.message, "error"); }
-  }
   return (
     <div className="table wide-table">
       {data.guests.map(g => (
@@ -1038,7 +1082,6 @@ function MgrGuests({ api, data, reload, show }) {
           <span>Room {g.room_number || "–"}</span>
           <span className={`pill ${g.profile_status || "pending"}`}>{g.profile_status || "pending"}</span>
           <span>{g.current_location || "–"}</span>
-          <button className="ghost sm" onClick={() => requestVerify(g.id)}>Request verify</button>
         </div>
       ))}
       {!data.guests.length && <p className="muted">No guests yet</p>}
@@ -1565,23 +1608,83 @@ function MgrSettings({ api, data, reload, show }) {
   );
 }
 
-function VerificationPanel({ req, onDone }) {
-  // req is the verification:result payload from the guest's live selfie comparison:
-  // { guestName, roomNumber, storedSelfie, liveSelfieUrl, matchScore, verified }
+// ── CheckinConfirmPanel ───────────────────────────────────────────────────────
+// Shown after receptionist scans guest QR. Displays photo + booking details.
+// Receptionist visually confirms identity then taps Confirm Check-In.
+
+function CheckinConfirmPanel({ booking, onConfirm, onFlag, onClose, confirming }) {
+  const facilitiesList = Array.isArray(booking.facilities) ? booking.facilities : [];
   return (
     <div className="stack">
-      <h2>Live Identity Verification</h2>
-      <p>Guest: <strong>{req.guestName}</strong> · Room <strong>{req.roomNumber}</strong></p>
-      <div className="verify-faces">
-        {req.storedSelfie && <div><p className="muted">Profile photo</p><ZoomImg src={req.storedSelfie} alt="Profile" className="selfie-img" /></div>}
-        {req.liveSelfieUrl && <div><p className="muted">Live selfie</p><ZoomImg src={req.liveSelfieUrl} alt="Live" className="selfie-img" /></div>}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>Check-In Confirmation</h2>
+        <button className="ghost sm" onClick={onClose}><X size={16} /></button>
       </div>
-      <div className={`verify-result ${req.verified ? "verified" : "failed"}`}>
-        {req.verified ? <CheckCircle size={32} /> : <XCircle size={32} />}
-        <strong>{req.verified ? "Identity Verified ✓" : "Verification Failed ✗"}</strong>
-        <p className="muted">Similarity score: {Number(req.matchScore || 1).toFixed(3)} (threshold: 0.6)</p>
+
+      {/* Guest photo — full width, prominent */}
+      {booking.selfie_url ? (
+        <img
+          src={booking.selfie_url}
+          alt={booking.guest_name}
+          className="checkin-guest-photo"
+        />
+      ) : (
+        <div className="checkin-no-photo">
+          <Users size={48} />
+          <p>No photo uploaded</p>
+        </div>
+      )}
+
+      {/* Guest + booking details */}
+      <div className="checkin-detail-list">
+        <div className="checkin-detail-row">
+          <Users size={15} />
+          <span><strong>{booking.guest_name}</strong></span>
+        </div>
+        <div className="checkin-detail-row">
+          <BedDouble size={15} />
+          <span>Room <strong>{booking.room_number}</strong> · {cap(booking.room_type)}</span>
+        </div>
+        <div className="checkin-detail-row">
+          <CalendarDays size={15} />
+          <span>Check-in <strong>{fmtDate(booking.check_in)}</strong></span>
+        </div>
+        <div className="checkin-detail-row">
+          <CalendarDays size={15} />
+          <span>Check-out <strong>{fmtDate(booking.check_out)}</strong></span>
+        </div>
+        {booking.package_name && (
+          <div className="checkin-detail-row">
+            <Star size={15} />
+            <span>Package: <strong>{booking.package_name}</strong></span>
+          </div>
+        )}
+        {facilitiesList.length > 0 && (
+          <div className="checkin-detail-row">
+            <Dumbbell size={15} />
+            <span>Facilities: <strong>{facilitiesList.join(", ")}</strong></span>
+          </div>
+        )}
+        {booking.special_notes && (
+          <div className="checkin-detail-row muted">
+            <span>Notes: {booking.special_notes}</span>
+          </div>
+        )}
       </div>
-      <button className="primary" onClick={onDone}>Done</button>
+
+      {/* Action buttons */}
+      <div className="checkin-action-btns">
+        <button
+          className="primary checkin-confirm-btn"
+          onClick={onConfirm}
+          disabled={confirming}
+        >
+          <Check size={18} />{confirming ? "Checking in…" : "Confirm Check-In"}
+        </button>
+        <button className="danger-btn" onClick={onFlag}>
+          <AlertTriangle size={18} />Flag Issue
+        </button>
+      </div>
     </div>
   );
 }
@@ -1593,7 +1696,6 @@ function GuestApp({ token }) {
   const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState("home");
   const [lang, setLang] = useState("English");
-  const [verifyModal, setVerifyModal] = useState(false);
   const { toast, show } = useToast();
 
   async function gReq(path, opts = {}) {
@@ -1621,8 +1723,6 @@ function GuestApp({ token }) {
     const socket = io(API);
     socket.emit("guest:join", payload.booking.id);
     socket.on("messages:new", reload);
-    // verification:requested is emitted directly to this booking room by the backend
-    socket.on("verification:requested", () => setVerifyModal(true));
     return () => socket.disconnect();
   }, [payload?.booking?.id]);
 
@@ -1677,10 +1777,6 @@ function GuestApp({ token }) {
         ))}
       </nav>
 
-      {verifyModal && (
-        <LiveVerify token={token} gReq={gReq} booking={booking} show={show} lang={lang} onDone={() => setVerifyModal(false)} />
-      )}
-
       <Toast toast={toast} />
     </main>
   );
@@ -1689,28 +1785,22 @@ function GuestApp({ token }) {
 function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
   const [name, setName] = useState(booking.guest_name || "");
   const [selfie, setSelfie] = useState(null);
-  const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState("");
+  const [saving, setSaving] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
-    if (!selfie) { show("Please take a selfie first", "error"); return; }
-    setProcessing(true);
+    if (!selfie) { show("Please upload a photo first", "error"); return; }
+    setSaving(true);
     try {
-      setProgress("Loading face models…");
-      await loadFaceModels(setProgress);
-      setProgress("Detecting face…");
-      const descriptor = await extractDescriptorFromDataUrl(selfie);
-      if (!descriptor) { show("No face detected — please retake", "error"); setProcessing(false); return; }
-      setProgress("Saving profile…");
       const res = await fetch(`${API}/api/guest/${token}/profile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, selfieUrl: selfie, faceDescriptor: Array.from(descriptor) })
+        body: JSON.stringify({ name, selfieUrl: selfie })
       });
       if (!res.ok) throw new Error((await res.json()).error);
+      show("Profile saved!", "success");
       onComplete();
-    } catch (err) { show(err.message, "error"); setProcessing(false); setProgress(""); }
+    } catch (err) { show(err.message, "error"); setSaving(false); }
   }
 
   return (
@@ -1722,10 +1812,10 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
         <form className="stack" onSubmit={submit}>
           <input required placeholder={t(lang, "yourName")} value={name} onChange={e => setName(e.target.value)} />
           <SelfieCapture onCapture={setSelfie} label={t(lang, "takeSelfie")} hint={t(lang, "selfieHint")} />
-          {processing && <p className="hint">{progress}</p>}
-          {!processing && selfie && (
+          {selfie && !saving && (
             <button className="primary" type="submit"><Check size={18} />{t(lang, "confirmProfile")}</button>
           )}
+          {saving && <p className="hint">Saving profile…</p>}
         </form>
       </div>
       <Toast toast={toast} />
@@ -2005,55 +2095,6 @@ function GuestCheckout({ booking, gReq, show, lang }) {
         <button className="ghost" onClick={manualCheckout}><Check size={18} />{t(lang, "checkoutConfirm")}</button>
       </div>
       {scanning && <QrScanner onScan={handleScan} onClose={() => setScanning(false)} />}
-    </div>
-  );
-}
-
-function LiveVerify({ token, gReq, booking, show, lang, onDone }) {
-  const [selfie, setSelfie] = useState(null);
-  const [processing, setProcessing] = useState(false);
-
-  async function submit() {
-    if (!selfie) { show("Please take a selfie", "error"); return; }
-    setProcessing(true);
-    try {
-      await loadFaceModels();
-      const liveDescriptor = await extractDescriptorFromDataUrl(selfie);
-      if (!liveDescriptor) { show("No face detected", "error"); setProcessing(false); return; }
-
-      // Compare live selfie with stored profile photo
-      let matchScore = 1.0; // 1.0 = no match (max distance)
-      let verified = false;
-      if (booking?.selfie_url) {
-        try {
-          const storedDescriptor = await extractDescriptorFromDataUrl(booking.selfie_url);
-          if (storedDescriptor) {
-            const cmp = compareDescriptors(storedDescriptor, liveDescriptor);
-            matchScore = cmp.distance;
-            verified = cmp.verified;
-          }
-        } catch { /* face comparison optional — still send the live selfie */ }
-      }
-
-      await gReq("/live-verify", {
-        method: "POST",
-        body: { liveSelfieUrl: selfie, matchScore, verified }
-      });
-      show(verified ? "Identity verified ✓" : t(lang, "verificationSent"), verified ? "success" : "info");
-      onDone();
-    } catch (err) { show(err.message, "error"); setProcessing(false); }
-  }
-
-  return (
-    <div className="modal-overlay">
-      <div className="modal-box">
-        <h2>{t(lang, "verifyIdentity")}</h2>
-        <p>{t(lang, "verifyHint")}</p>
-        <SelfieCapture onCapture={setSelfie} label={t(lang, "verifyNow")} />
-        {selfie && !processing && <button className="primary" onClick={submit}><ShieldCheck size={18} />{t(lang, "verifyNow")}</button>}
-        {processing && <p className="hint">Processing…</p>}
-        <button className="ghost" onClick={onDone}><X size={14} />Dismiss</button>
-      </div>
     </div>
   );
 }

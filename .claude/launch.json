@@ -11,7 +11,8 @@
   "deploy": {
     "render": {
       "serviceId": "srv-d88c0ubbc2fs73epgh7g",
-      "hookUrl": "https://api.render.com/deploy/srv-d88c0ubbc2fs73epgh7g?key=neOwHctkRLs"
+      "hookUrl": "https://api.render.com/deploy/srv-d88c0ubbc2fs73epgh7g?key=neOwHctkRLs",
+      "apiUrl": "https://zynloc-hotel-api.onrender.com"
     },
     "cloudflare": {
       "project": "zynloc-hotel",

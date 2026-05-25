@@ -75,16 +75,26 @@ bookingsRouter.post("/:id/resend-email", asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// Receptionist scans a rotating check-in QR token
+// Receptionist scans a rotating check-in QR token → returns guest details for visual confirmation
 bookingsRouter.post("/scan-checkin", asyncHandler(async (req, res) => {
   const { token } = z.object({ token: z.string() }).parse(req.body);
   const { rows } = await query(
-    `SELECT b.*, g.name guest_name, g.email guest_email, g.selfie_url, g.profile_complete,
-            g.face_descriptor, r.number room_number, r.type room_type,
-            p.name package_name
+    `SELECT b.*,
+            g.name guest_name, g.email guest_email, g.selfie_url, g.profile_complete,
+            r.number room_number, r.type room_type,
+            q.token qr_token,
+            p.name package_name,
+            COALESCE(
+              (SELECT json_agg(f.name ORDER BY f.name)
+                 FROM facility_access fa
+                 JOIN facilities f ON f.id = fa.facility_id
+                WHERE fa.booking_id = b.id AND fa.included = TRUE),
+              '[]'::json
+            ) AS facilities
        FROM bookings b
        JOIN guests   g ON g.id = b.guest_id
        JOIN rooms    r ON r.id = b.room_id
+       JOIN qr_codes q ON q.booking_id = b.id
        LEFT JOIN packages p ON p.id = b.package_id
       WHERE b.checkin_token = $1 AND b.hotel_id = $2`,
     [token, req.user.hotelId]

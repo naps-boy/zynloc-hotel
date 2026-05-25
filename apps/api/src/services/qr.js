@@ -77,7 +77,7 @@ export async function getQrPayload(token) {
             b.profile_status, b.special_notes, b.guest_phone, b.checkin_token,
             b.checkin_token_expires_at, b.package_id,
             g.id guest_id, g.name guest_name, g.email guest_email,
-            g.current_location, g.selfie_url, g.profile_complete, g.face_descriptor,
+            g.current_location, g.selfie_url, g.profile_complete,
             r.number room_number, r.type room_type,
             h.name hotel_name, h.logo_url, h.address, h.reception_phone,
             h.floor_plan_url, h.floor_plan_markers

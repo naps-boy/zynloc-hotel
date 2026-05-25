@@ -3,7 +3,7 @@ import { z } from "zod";
 import { query } from "../db/pool.js";
 import { getQrPayload, rotateCheckinQr } from "../services/qr.js";
 import { emitHotel, emitBooking } from "../services/realtime.js";
-import { sendCheckoutReceipt, sendVerificationRequest } from "../services/email.js";
+import { sendCheckoutReceipt } from "../services/email.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
 
 export const guestRouter = Router();
@@ -65,16 +65,15 @@ guestRouter.get("/:token", requireValidQr, asyncHandler(async (req, res) => {
 // ─── POST /:token/profile — complete guest profile (selfie + name) ────────────
 guestRouter.post("/:token/profile", requireValidQr, asyncHandler(async (req, res) => {
   const body = z.object({
-    name:           z.string().min(2),
-    selfieUrl:      z.string().min(10),        // base64 data URL from camera
-    faceDescriptor: z.array(z.number()).length(128).optional().nullable()
+    name:      z.string().min(2),
+    selfieUrl: z.string().min(10),   // base64 data URL from file input
   }).parse(req.body);
 
   await query(
     `UPDATE guests
-        SET name = $1, selfie_url = $2, face_descriptor = $3, profile_complete = TRUE
-      WHERE id = $4`,
-    [body.name, body.selfieUrl, body.faceDescriptor ? JSON.stringify(body.faceDescriptor) : null, req.qr.guest_id]
+        SET name = $1, selfie_url = $2, profile_complete = TRUE
+      WHERE id = $3`,
+    [body.name, body.selfieUrl, req.qr.guest_id]
   );
   await query(
     "UPDATE bookings SET profile_status = 'complete' WHERE id = $1",
@@ -117,43 +116,7 @@ guestRouter.get("/:token/checkin-qr", requireValidQr, asyncHandler(async (req, r
   res.json({ token: booking.checkin_token, expires_at: booking.checkin_token_expires_at, qr_data_url: qrDataUrl });
 }));
 
-// ─── POST /:token/request-verification — staff triggers live selfie verification ──
-// Emits to the hotel room (so all staff see it) AND to the guest's booking room
-// so the guest's browser opens the live selfie modal.
-guestRouter.post("/:token/request-verification", requireValidQr, asyncHandler(async (req, res) => {
-  const payload = {
-    bookingId:  req.qr.booking_id,
-    guestId:    req.qr.guest_id,
-    guestName:  req.qr.guest_name,
-    roomNumber: req.qr.room_number
-  };
-  emitHotel(req.qr.hotel_id, "verification:requested", payload);
-  emitBooking(req.qr.booking_id, "verification:requested", payload);
-  res.json({ ok: true });
-}));
-
-// ─── POST /:token/live-verify — guest submits live selfie, result goes to dashboard ──
-guestRouter.post("/:token/live-verify", requireValidQr, asyncHandler(async (req, res) => {
-  const body = z.object({
-    liveSelfieUrl:      z.string().min(10),
-    matchScore:         z.number().min(0).max(2),
-    verified:           z.boolean()
-  }).parse(req.body);
-
-  emitHotel(req.qr.hotel_id, "verification:result", {
-    bookingId:     req.qr.booking_id,
-    guestId:       req.qr.guest_id,
-    guestName:     req.qr.guest_name,
-    roomNumber:    req.qr.room_number,
-    storedSelfie:  req.qr.selfie_url,
-    liveSelfieUrl: body.liveSelfieUrl,
-    matchScore:    body.matchScore,
-    verified:      body.verified
-  });
-  res.json({ ok: true });
-}));
-
-// ─── POST /:token/checkin — confirm check-in (called by staff after verify) ───
+// ─── POST /:token/checkin — receptionist confirms check-in after visual ID ────
 guestRouter.post("/:token/checkin", requireValidQr, asyncHandler(async (req, res) => {
   await query("UPDATE bookings SET status = 'current' WHERE id = $1", [req.qr.booking_id]);
   const notif = (await query(
