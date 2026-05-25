@@ -974,12 +974,12 @@ function MgrBookings({ api, data, reload, show }) {
     if (!checkinData?.qr_token) return;
     setConfirming(true);
     try {
-      await fetch(`${API}/api/guest/${checkinData.qr_token}/checkin`, { method: "POST" });
+      await api.request(`/api/guest/${checkinData.qr_token}/checkin`, { method: "POST" });
       show(`${checkinData.guest_name} checked in to Room ${checkinData.room_number} ✓`, "success");
       setCheckinData(null);
       reload();
     } catch (err) { show(err.message, "error"); }
-    setConfirming(false);
+    finally { setConfirming(false); }
   }
 
   function flagIssue() {
@@ -1018,17 +1018,15 @@ function MgrBookings({ api, data, reload, show }) {
       </form>
 
       <div className="stack">
-        {/* Check-in QR scanner */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <div className="scan-row">
           <button className="primary sm" onClick={() => setScanning(true)}>
             <QrCode size={16} />Scan Guest QR
           </button>
-          <span className="muted" style={{ fontSize: 12 }}>Tap to scan a guest's check-in QR</span>
+          <span className="muted scan-hint">Tap to scan a guest's check-in QR</span>
         </div>
 
-        {/* Check-in confirmation panel */}
         {checkinData && (
-          <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="checkin-panel-wrap">
             <CheckinConfirmPanel
               booking={checkinData}
               onConfirm={confirmCheckin}
@@ -1042,9 +1040,9 @@ function MgrBookings({ api, data, reload, show }) {
         <div className="table">
           {data.bookings.map(b => (
             <div className="row booking-row" key={b.id}>
-              <div className="guest-avatar" style={{ width: 36, height: 36, flexShrink: 0 }}>
+              <div className="guest-avatar booking-avatar">
                 {b.selfie_url
-                  ? <img src={b.selfie_url} alt={b.guest_name} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+                  ? <img src={b.selfie_url} alt={b.guest_name} className="booking-avatar-img" />
                   : <span>{b.guest_name?.[0] || "?"}</span>
                 }
               </div>
@@ -1616,12 +1614,11 @@ function CheckinConfirmPanel({ booking, onConfirm, onFlag, onClose, confirming }
   const facilitiesList = Array.isArray(booking.facilities) ? booking.facilities : [];
   return (
     <div className="stack">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h2 style={{ margin: 0 }}>Check-In Confirmation</h2>
+      <div className="panel-header">
+        <h2>Check-In Confirmation</h2>
         <button className="ghost sm" onClick={onClose}><X size={16} /></button>
       </div>
 
-      {/* Guest photo — full width, prominent */}
       {booking.selfie_url ? (
         <img
           src={booking.selfie_url}

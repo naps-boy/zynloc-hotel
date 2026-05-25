@@ -70,6 +70,10 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}a{color:var(--g
 .onboarding-shell{min-height:100vh;background:var(--bg);display:flex;flex-direction:column;align-items:center;padding:40px 20px}.onboarding-panel{background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:36px;width:100%;max-width:640px;box-shadow:var(--shadow)}.onboarding-panel h1{font-size:24px;font-weight:800;margin-bottom:4px}.onboarding-panel .sub{color:var(--muted);margin-bottom:24px}
 .wizard-steps{display:flex;gap:4px;margin-bottom:28px;flex-wrap:wrap}.wizard-step{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:20px;font-size:12px;font-weight:600;background:var(--bg3);color:var(--text-muted,#6b7a8d);white-space:nowrap}.wizard-step span{width:20px;height:20px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0}.wizard-step.done{background:rgba(38,194,129,.12);color:var(--green)}.wizard-step.done span{background:var(--green);color:#000}.wizard-step.active{background:rgba(216,168,79,.15);color:var(--gold)}.wizard-step.active span{background:var(--gold);color:#000}
 /* ── Check-in confirm panel ─────────────────────────────────────────── */
+.panel-header{display:flex;align-items:center;justify-content:space-between}.panel-header h2{margin:0}
+.scan-row{display:flex;align-items:center;gap:10px;margin-bottom:4px}.scan-hint{font-size:12px}
+.booking-avatar{width:36px;height:36px;flex-shrink:0}.booking-avatar-img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.checkin-panel-wrap{padding:0;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius)}
 .checkin-guest-photo{width:100%;max-height:420px;object-fit:cover;border-radius:var(--radius);border:2px solid var(--gold);display:block}
 .checkin-no-photo{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;height:200px;background:var(--bg3);border-radius:var(--radius);border:2px dashed var(--border);color:var(--muted)}
 .checkin-detail-list{display:flex;flex-direction:column;gap:10px;padding:4px 0}

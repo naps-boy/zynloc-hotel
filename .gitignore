@@ -25,3 +25,7 @@ Thumbs.db
 # Wrangler
 .wrangler/
 package-lock.json
+
+# Debug / scratch scripts
+pgtest*.mjs
+scratch*.mjs
