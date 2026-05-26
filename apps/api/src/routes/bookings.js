@@ -5,7 +5,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { createBookingFromDraft } from "../services/bookings.js";
 import { emitHotel, emitBooking } from "../services/realtime.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
-import { sendBookingConfirmation, getHotelSmtpConfig } from "../services/email.js";
+import { sendBookingConfirmation } from "../services/email.js";
 import { query as dbQuery } from "../db/pool.js";
 
 export const bookingsRouter = Router();
@@ -48,26 +48,6 @@ bookingsRouter.post("/", asyncHandler(async (req, res) => {
   const body = bookingSchema.parse(req.body);
   const booking = await createBookingFromDraft({ hotelId: req.user.hotelId, draft: body });
   res.status(201).json(booking);
-}));
-
-// TEMP DEBUG: check what SMTP config getHotelSmtpConfig resolves to + test it
-bookingsRouter.get("/debug-smtp", asyncHandler(async (req, res) => {
-  const { sendTestEmail } = await import("../services/email.js");
-  const cfg = await getHotelSmtpConfig(req.user.hotelId);
-  const info = {
-    hotelId: req.user.hotelId,
-    found: !!cfg,
-    configId: cfg?.id || null,
-    provider: cfg?.provider || null,
-    sender: cfg?.email || null,
-    keyLen: cfg?.smtp_pass?.length || 0,
-    keyPrefix: cfg?.smtp_pass?.substring(0, 12) || null,
-  };
-  if (cfg) {
-    const testResult = await sendTestEmail(cfg, "dekingnapo123@gmail.com");
-    info.testResult = testResult;
-  }
-  res.json(info);
 }));
 
 // Resend confirmation email
