@@ -10,7 +10,16 @@ guestsRouter.use(requireAuth);
 
 guestsRouter.get("/", asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `SELECT g.*, b.check_in, b.check_out, b.package_type, r.number room_number
+    `SELECT g.*,
+            b.id          booking_id,
+            b.check_in,
+            b.check_out,
+            b.package_type,
+            b.status      booking_status,
+            b.revoked,
+            b.profile_status,
+            r.number      room_number,
+            r.type        room_type
        FROM guests g
        LEFT JOIN bookings b ON b.guest_id = g.id AND b.status <> 'cancelled'
        LEFT JOIN rooms r ON r.id = b.room_id

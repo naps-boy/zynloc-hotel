@@ -30,6 +30,10 @@ async function sendViaBrevo(cfg, mailOpts) {
     to,
     subject:     mailOpts.subject,
     htmlContent: mailOpts.html,
+    headers: {
+      "List-Unsubscribe": `<mailto:${cfg.email}?subject=unsubscribe>`,
+      "X-Mailer":         "Zynloc Hotel Platform",
+    },
   };
 
   if (mailOpts.attachments?.length) {
@@ -334,7 +338,7 @@ export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, r
     const mailOpts = {
       from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
       to:      staffEmail,
-      subject: "Zynloc Hotel — Password Reset",
+      subject: "Your password reset link",
       html,
     };
 

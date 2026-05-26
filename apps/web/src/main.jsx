@@ -1236,33 +1236,61 @@ function MgrGuests({ api, data, reload, show }) {
     setRevoking(null);
   }
 
+  function getStatus(g) {
+    if (g.revoked) return "revoked";
+    if (g.booking_status === "current") return "checked-in";
+    if (g.booking_status === "past") return "checked-out";
+    if (g.booking_status === "pending") return g.profile_status === "complete" ? "upcoming" : "pending";
+    return "pending";
+  }
+
+  const STATUS_LABEL = { "revoked": "Revoked", "checked-in": "Checked In", "checked-out": "Checked Out", "upcoming": "Upcoming", "pending": "Pending" };
+
+  function getDayProgress(g) {
+    if (g.booking_status !== "current" || !g.check_in || !g.check_out) return null;
+    const total = Math.max(1, Math.ceil((new Date(g.check_out) - new Date(g.check_in)) / 86400000));
+    const elapsed = Math.max(1, Math.ceil((Date.now() - new Date(g.check_in)) / 86400000));
+    return `Day ${Math.min(elapsed, total)} of ${total}`;
+  }
+
   return (
-    <div className="table wide-table">
+    <div className="guest-cards">
       {data.guests.map(g => {
-        const booking = data.bookings.find(b => b.guest_email === g.email);
+        const status = getStatus(g);
+        const dayProgress = getDayProgress(g);
         return (
-          <div className="row" key={g.id} style={{ opacity: booking?.revoked ? 0.6 : 1 }}>
-            <div className="guest-avatar">
-              {g.selfie_url ? <ZoomImg src={g.selfie_url} alt={g.name} className="guest-thumb-img" /> : <span>{g.name?.[0] || "?"}</span>}
+          <div className={`guest-card ${g.revoked ? "opacity-60" : ""}`} key={g.id}>
+            <div className="guest-card-photo">
+              {g.selfie_url
+                ? <ZoomImg src={g.selfie_url} alt={g.name} className="guest-thumb-img" />
+                : <span className="guest-avatar-initial">{g.name?.[0] || "?"}</span>}
             </div>
-            <div><strong>{g.name}</strong><small>{g.email}</small></div>
-            <span>Room {g.room_number || "–"}</span>
-            <span className={`pill ${booking?.revoked ? "revoked" : g.profile_status || "pending"}`}>
-              {booking?.revoked ? "revoked" : g.profile_status || "pending"}
-            </span>
-            <span>{g.current_location || "–"}</span>
-            {booking && (
-              <div className="row-actions">
-                {booking.revoked
-                  ? <button className="restore-btn" onClick={() => restoreBooking(booking.id)} disabled={revoking === booking.id}>
-                      <CheckCircle size={12} />{revoking === booking.id ? "…" : "Restore"}
-                    </button>
-                  : <button className="revoke-btn" onClick={() => revokeBooking(booking.id)} disabled={revoking === booking.id}>
-                      <X size={12} />{revoking === booking.id ? "…" : "Revoke"}
-                    </button>
-                }
+            <div className="guest-card-body">
+              <div className="guest-card-top">
+                <strong className="guest-card-name">{g.name || "Unknown"}</strong>
+                <span className={`pill ${status}`}>{STATUS_LABEL[status] || status}</span>
               </div>
-            )}
+              <small className="muted">{g.email}</small>
+              <div className="guest-card-details">
+                {g.room_number && <span>Room {g.room_number}{g.room_type ? ` · ${g.room_type}` : ""}</span>}
+                {g.check_in && <span>{new Date(g.check_in).toLocaleDateString()} – {new Date(g.check_out).toLocaleDateString()}</span>}
+                {g.package_type && <span>Package: {g.package_type}</span>}
+                {dayProgress && <span className="day-progress">{dayProgress}</span>}
+                {g.current_location && <span>📍 {g.current_location}</span>}
+              </div>
+              {g.booking_id && (
+                <div className="guest-card-actions">
+                  {g.revoked
+                    ? <button className="restore-btn" onClick={() => restoreBooking(g.booking_id)} disabled={revoking === g.booking_id}>
+                        <CheckCircle size={12} />{revoking === g.booking_id ? "…" : "Restore"}
+                      </button>
+                    : <button className="revoke-btn" onClick={() => revokeBooking(g.booking_id)} disabled={revoking === g.booking_id}>
+                        <X size={12} />{revoking === g.booking_id ? "…" : "Revoke"}
+                      </button>
+                  }
+                </div>
+              )}
+            </div>
           </div>
         );
       })}
@@ -1410,12 +1438,18 @@ function MgrAccessLog({ data }) {
 function MgrMessages({ api, data, reload }) {
   const [body, setBody] = useState("");
   const [guestId, setGuestId] = useState("");
+  const endRef = useRef(null);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [data.messages]);
 
   async function send(e) {
     e.preventDefault();
+    if (!body.trim()) return;
     await api.request("/api/messages", { method: "POST", body: JSON.stringify({ body, guestId: guestId || undefined, broadcast: !guestId }) });
     setBody(""); reload();
   }
+
+  const msgs = [...data.messages].reverse();
 
   return (
     <section className="split">
@@ -1430,14 +1464,22 @@ function MgrMessages({ api, data, reload }) {
           <button className="primary"><Send size={18} />Send</button>
         </form>
       </div>
-      <div className="feed">
-        {data.messages.map(m => (
-          <div className={`bubble ${m.sender_type === "hotel" ? "hotel" : "guest"}`} key={m.id}>
-            <strong>{m.sender || m.staff_name || "Guest"}</strong>
-            <p>{m.body}</p>
-            <time>{fmtTime(m.created_at)}</time>
-          </div>
-        ))}
+      <div className="panel stack" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <h2>Conversation</h2>
+        <div className="messages-list" style={{ flex: 1, overflowY: "auto" }}>
+          {msgs.map(m => {
+            const isSelf = m.sender === "staff";
+            return (
+              <div className={`message-bubble ${isSelf ? "guest" : "staff"}`} key={m.id}>
+                <span className="msg-label">{isSelf ? "You" : (m.guest_name || "Guest")}</span>
+                <div className="bubble">{m.body}</div>
+                <span className="ts">{fmtTime(m.created_at)}</span>
+              </div>
+            );
+          })}
+          <div ref={endRef} />
+        </div>
+        {!msgs.length && <p className="muted">No messages yet</p>}
       </div>
     </section>
   );
@@ -1979,7 +2021,7 @@ function GuestApp({ token }) {
         {tab === "facilities" && <GuestFacilities facilities={facilities} gReq={gReq} show={show} lang={lang} />}
         {tab === "navigate" && <GuestNavigate waypoints={waypoints} connections={connections} lang={lang} show={show} />}
         {tab === "services" && <GuestServices gReq={gReq} show={show} lang={lang} />}
-        {tab === "messages" && <GuestMessages messages={messages} gReq={gReq} reload={reload} show={show} lang={lang} />}
+        {tab === "messages" && <GuestMessages messages={messages} gReq={gReq} reload={reload} show={show} lang={lang} booking={booking} />}
         {tab === "checkout" && <GuestCheckout booking={booking} gReq={gReq} show={show} lang={lang} />}
       </div>
 
@@ -2274,9 +2316,10 @@ function GuestServices({ gReq, show, lang }) {
   );
 }
 
-function GuestMessages({ messages, gReq, reload, show, lang }) {
+function GuestMessages({ messages, gReq, reload, show, lang, booking }) {
   const [body, setBody] = useState("");
   const endRef = useRef(null);
+  const hotelName = booking?.hotel_name || "Hotel";
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -2287,21 +2330,30 @@ function GuestMessages({ messages, gReq, reload, show, lang }) {
     catch (err) { show(err.message, "error"); }
   }
 
+  const msgs = [...messages].reverse();
+
   return (
     <div className="guest-messages">
-      <h2>{t(lang, "messages")}</h2>
-      <div className="message-feed">
-        {messages.map(m => (
-          <div key={m.id} className={`bubble ${m.sender_type === "guest" ? "guest" : "hotel"}`}>
-            <p>{m.body}</p>
-            <time>{fmtTime(m.created_at)}</time>
-          </div>
-        ))}
+      <div className="chat-header">
+        <MessageSquare size={16} />
+        <span>Conversation with {hotelName}</span>
+      </div>
+      <div className="messages-list">
+        {msgs.map(m => {
+          const isGuest = m.sender === "guest";
+          return (
+            <div key={m.id} className={`message-bubble ${isGuest ? "guest" : "staff"}`}>
+              <span className="msg-label">{isGuest ? t(lang, "you") || "You" : hotelName}</span>
+              <div className="bubble">{m.body}</div>
+              <span className="ts">{fmtTime(m.created_at)}</span>
+            </div>
+          );
+        })}
         <div ref={endRef} />
       </div>
-      <form className="message-input" onSubmit={send}>
-        <input placeholder={t(lang, "typeMessage")} value={body} onChange={e => setBody(e.target.value)} />
-        <button type="submit"><Send size={18} /></button>
+      <form className="message-input-row" onSubmit={send}>
+        <input placeholder={t(lang, "typeMessage") || "Type a message…"} value={body} onChange={e => setBody(e.target.value)} />
+        <button type="submit" className="primary"><Send size={16} /></button>
       </form>
     </div>
   );
