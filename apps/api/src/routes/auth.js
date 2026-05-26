@@ -8,40 +8,6 @@ import { asyncHandler, HttpError } from "../utils/http.js";
 import { config } from "../config.js";
 import { sendPasswordResetEmail } from "../services/email.js";
 
-// Auto-provision a default Brevo SMTP config for a newly registered hotel.
-// Copies the key from BREVO_API_KEY env var (preferred) or from any existing Brevo
-// config in the database. Runs after the transaction so failures don't roll back registration.
-async function provisionDefaultSmtp(hotelId) {
-  try {
-    // Resolve the key: env var first, then copy from any existing Brevo config
-    let key = config.brevoApiKey?.trim() || "";
-    let senderEmail = config.brevoSenderEmail;
-    let senderName  = config.brevoSenderName;
-
-    if (!key) {
-      const { rows } = await query(
-        "SELECT smtp_pass FROM smtp_configs WHERE provider = 'brevo' ORDER BY created_at LIMIT 1"
-      );
-      if (!rows.length) {
-        console.warn(`[Auth] No Brevo config available to provision for hotel ${hotelId}`);
-        return;
-      }
-      key = rows[0].smtp_pass;
-      // Always use the platform sender — never copy email/name from an arbitrary hotel
-    }
-
-    await query(
-      `INSERT INTO smtp_configs
-         (hotel_id, provider, label, sender_name, email, smtp_pass, is_default)
-       VALUES ($1, 'brevo', 'Default (Brevo)', $2, $3, $4, TRUE)
-       ON CONFLICT DO NOTHING`,
-      [hotelId, senderName, senderEmail, key]
-    );
-    console.log(`[Auth] Provisioned default Brevo SMTP config for hotel ${hotelId}`);
-  } catch (err) {
-    console.warn(`[Auth] Failed to provision SMTP config for hotel ${hotelId}:`, err.message);
-  }
-}
 
 export const authRouter = Router();
 
@@ -65,9 +31,6 @@ authRouter.post("/register-manager", asyncHandler(async (req, res) => {
     )).rows[0];
     return { hotel, staff };
   });
-
-  // Provision default SMTP config for the new hotel (non-blocking — doesn't fail registration)
-  await provisionDefaultSmtp(result.hotel.id);
 
   res.status(201).json({ ...result, token: signSession(result.staff) });
 }));
