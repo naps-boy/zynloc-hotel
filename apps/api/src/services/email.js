@@ -150,11 +150,14 @@ export async function sendTestEmail(smtpCfg, toAddress) {
 // ── Internal send helper ──────────────────────────────────────────────────────
 
 async function send({ hotelId, to, subject, html, attachments = [] }) {
+  console.log(`[Email:send] ENTRY — hotelId=${hotelId} to=${Array.isArray(to) ? to.join(",") : to} subject="${subject}"`);
+
   const smtpCfg = await getHotelSmtpConfig(hotelId);
   if (!smtpCfg) {
-    console.warn(`[Email] No email config for hotel ${hotelId} — skipping "${subject}"`);
-    return;
+    console.warn(`[Email:send] No SMTP config for hotel ${hotelId} — skipping "${subject}"`);
+    return null;
   }
+  console.log(`[Email:send] Found config id=${smtpCfg.id} provider=${smtpCfg.provider} sender=${smtpCfg.email} key_len=${smtpCfg.smtp_pass?.length ?? 0}`);
 
   const mailOpts = {
     from:    `"${smtpCfg.sender_name}" <${smtpCfg.email}>`,
@@ -171,28 +174,29 @@ async function send({ hotelId, to, subject, html, attachments = [] }) {
     }));
   }
 
-  console.log(
-    `[Email] Sending "${subject}" to ${mailOpts.to} via provider=${smtpCfg.provider || "custom"}`
-  );
-
   try {
     if (smtpCfg.provider === "brevo") {
-      await sendViaBrevo(smtpCfg, mailOpts);
+      const r = await sendViaBrevo(smtpCfg, mailOpts);
+      console.log(`[Email:send] SUCCESS via Brevo — messageId=${r.messageId}`);
+      return r.messageId;
     } else {
       const info = await createSmtpTransporter(smtpCfg).sendMail(mailOpts);
-      console.log(`[Email] Sent — messageId=${info.messageId}`);
+      console.log(`[Email:send] SUCCESS via SMTP — messageId=${info.messageId}`);
+      return info.messageId;
     }
   } catch (err) {
     // Email failure must never block a booking/checkin operation
-    console.error(`[Email] Failed to send "${subject}":`, err.message);
+    console.error(`[Email:send] FAILED to send "${subject}" to ${mailOpts.to}:`, err.message);
+    return null;
   }
 }
 
 // ── Transactional emails ──────────────────────────────────────────────────────
 
 export async function sendBookingConfirmation({ guest, hotel, booking, qr, hotelId }) {
+  console.log(`[Email:sendBookingConfirmation] ENTRY — guest=${guest?.email} hotel=${hotel?.name} hotelId=${hotelId}`);
   const guestLink = `${config.clientUrl}/guest/${qr.token}`;
-  await send({
+  const messageId = await send({
     hotelId,
     to: guest.email,
     subject: `Your booking at ${hotel.name} — ${new Date(booking.check_in).toLocaleDateString()}`,
@@ -253,9 +257,12 @@ export async function sendBookingConfirmation({ guest, hotel, booking, qr, hotel
       ? [{ filename: "zynloc-access-qr.png", content: qr.qr_data_url.split(",")[1] }]
       : [],
   });
+  console.log(`[Email:sendBookingConfirmation] DONE — messageId=${messageId}`);
+  return messageId;
 }
 
 export async function sendCheckoutReceipt({ guest, hotel, booking }) {
+  console.log(`[Email:sendCheckoutReceipt] ENTRY — guest=${guest?.email} hotel=${hotel?.name}`);
   const nights = Math.max(1, Math.ceil(
     (new Date(booking.check_out) - new Date(booking.check_in)) / 86_400_000
   ));
@@ -298,6 +305,7 @@ export async function sendCheckoutReceipt({ guest, hotel, booking }) {
 }
 
 export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, resetLink }) {
+  console.log(`[Email:sendPasswordResetEmail] ENTRY — staffEmail=${staffEmail} hotelId=${hotelId}`);
   // Try ALL smtp configs for the hotel (default first, then any remaining).
   // This handles the case where the default config has a stale/revoked key —
   // we fall through to the next config automatically.
@@ -346,11 +354,11 @@ export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, r
       if (smtpCfg.provider === "brevo") {
         const result = await sendViaBrevo(smtpCfg, mailOpts);
         console.log(`[PasswordReset] SUCCESS via ${label} — messageId=${result.messageId}`);
-        return; // sent — stop trying
+        return result.messageId;
       } else {
         const info = await createSmtpTransporter(smtpCfg).sendMail(mailOpts);
         console.log(`[PasswordReset] SUCCESS via ${label} — messageId=${info.messageId}`);
-        return; // sent — stop trying
+        return info.messageId;
       }
     } catch (err) {
       const hasMore = i < allConfigs.length - 1;
@@ -362,6 +370,7 @@ export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, r
 }
 
 export async function sendVerificationRequest({ guest, hotel }) {
+  console.log(`[Email:sendVerificationRequest] ENTRY — guest=${guest?.email} hotel=${hotel?.name}`);
   const link = `${config.clientUrl}/guest/${guest.access_token}`;
   await send({
     hotelId: hotel.id,

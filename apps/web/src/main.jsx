@@ -9,7 +9,7 @@ import {
 import {
   AlertTriangle, BarChart3, BedDouble, Bell, CalendarDays, Camera,
   Check, CheckCircle, ChevronRight, DoorOpen, Dumbbell, FileDown,
-  Globe, Hotel, LogOut, Map, MessageSquare, Navigation, PhoneCall,
+  Globe, Hotel, LogOut, Map, MessageSquare, Monitor, Navigation, PhoneCall,
   Plus, QrCode, Send, Settings, ShieldCheck, Sparkles, Star, Truck,
   Upload, Users, X, XCircle, Zap, ZoomIn
 } from "lucide-react";
@@ -773,6 +773,7 @@ function ManagerDashboard({ api, initialSettings }) {
     staff: [], accessLog: [], serviceRequests: []
   });
   const [arrivals, setArrivals] = useState([]);
+  const [sessionCount, setSessionCount] = useState(1);
   const { toast, show } = useToast();
 
   const NAV = [
@@ -842,7 +843,12 @@ function ManagerDashboard({ api, initialSettings }) {
     });
   }
 
-  useEffect(() => { loadAll().catch(() => api.logout()); }, []);
+  useEffect(() => {
+    loadAll().catch(() => api.logout());
+    // BUG 3: 30-second safety-net poll — catches anything Socket.IO missed
+    const interval = setInterval(() => { loadAllRef.current(); }, 30_000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Stable ref so socket callbacks always call the latest loadAll without stale closure
   const loadAllRef = useRef(loadAll);
@@ -863,6 +869,8 @@ function ManagerDashboard({ api, initialSettings }) {
       setArrivals(prev => [...prev, { ...ev, arrivedAt: Date.now() }]);
       show(`${ev.guestName} has arrived at reception!`, "success");
     });
+    // BUG 2: listen for live session count from server
+    socket.on("hotel:session_count", ({ count }) => setSessionCount(count));
     return () => socket.disconnect();
   }, [me?.hotel_id]);
 
@@ -895,6 +903,11 @@ function ManagerDashboard({ api, initialSettings }) {
             <Metric label="Occupancy" value={`${occupancy}%`} />
             <Metric label="Rooms" value={data.rooms.length} />
             <Metric label="Revenue" value={`$${revenue}`} />
+            {sessionCount > 1 && (
+              <div className="session-chip" title={`${sessionCount} devices logged in`}>
+                <Monitor size={13} />{sessionCount} devices
+              </div>
+            )}
             <div className="profile-chip">
               <span>{me?.name?.[0] || "M"}</span>
               <strong>{me?.name || "Manager"}</strong>

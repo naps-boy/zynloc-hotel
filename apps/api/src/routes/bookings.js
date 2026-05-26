@@ -65,14 +65,14 @@ bookingsRouter.post("/:id/resend-email", asyncHandler(async (req, res) => {
   if (!rows.length) throw new HttpError(404, "Booking not found");
   const b = rows[0];
   const hotel = (await query("SELECT * FROM hotels WHERE id = $1", [req.user.hotelId])).rows[0];
-  await sendBookingConfirmation({
+  const messageId = await sendBookingConfirmation({
     guest: { name: b.guest_name, email: b.guest_email },
     hotel,
     booking: b,
     qr: { token: b.qr_token, qr_data_url: b.qr_data_url },
     hotelId: req.user.hotelId,
   });
-  res.json({ ok: true });
+  res.json({ ok: true, messageId: messageId || null });
 }));
 
 // Receptionist scans a rotating check-in QR token → returns guest details for visual confirmation

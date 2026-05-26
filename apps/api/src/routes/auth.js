@@ -72,8 +72,8 @@ authRouter.post("/forgot-password", asyncHandler(async (req, res) => {
     );
     console.log(`[ForgotPw] Token saved. Sending reset email to ${staff.email}`);
     const resetLink = `${config.clientUrl}/reset-password?token=${token}`;
-    await sendPasswordResetEmail({ staffEmail: staff.email, staffName: staff.name, hotelId: staff.hotel_id, resetLink });
-    console.log(`[ForgotPw] sendPasswordResetEmail returned for ${staff.email}`);
+    const messageId = await sendPasswordResetEmail({ staffEmail: staff.email, staffName: staff.name, hotelId: staff.hotel_id, resetLink });
+    console.log(`[ForgotPw] sendPasswordResetEmail returned — messageId=${messageId} for ${staff.email}`);
   } else {
     console.log(`[ForgotPw] No staff account found for: ${lookupEmail} — no email sent`);
   }
