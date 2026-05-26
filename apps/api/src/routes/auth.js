@@ -20,15 +20,14 @@ async function provisionDefaultSmtp(hotelId) {
 
     if (!key) {
       const { rows } = await query(
-        "SELECT smtp_pass, email, sender_name FROM smtp_configs WHERE provider = 'brevo' ORDER BY created_at LIMIT 1"
+        "SELECT smtp_pass FROM smtp_configs WHERE provider = 'brevo' ORDER BY created_at LIMIT 1"
       );
       if (!rows.length) {
         console.warn(`[Auth] No Brevo config available to provision for hotel ${hotelId}`);
         return;
       }
-      key         = rows[0].smtp_pass;
-      senderEmail = rows[0].email;
-      senderName  = rows[0].sender_name;
+      key = rows[0].smtp_pass;
+      // Always use the platform sender — never copy email/name from an arbitrary hotel
     }
 
     await query(

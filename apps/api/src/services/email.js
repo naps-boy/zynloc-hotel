@@ -25,14 +25,21 @@ export async function getHotelSmtpConfig(hotelId) {
     };
   }
 
-  // 3. Last resort — reuse any existing Brevo config already in the database.
-  //    Since this platform shares a single Brevo account, any config has the right key.
+  // 3. Last resort — pull the API key from any existing Brevo config in the database.
+  //    Always use platform sender address so Brevo doesn't reject an unverified domain.
   const { rows: anyRows } = await query(
-    "SELECT * FROM smtp_configs WHERE provider = 'brevo' ORDER BY created_at LIMIT 1"
+    "SELECT smtp_pass FROM smtp_configs WHERE provider = 'brevo' ORDER BY created_at LIMIT 1"
   );
   if (anyRows[0]) {
-    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no config — sharing Brevo config from hotel ${anyRows[0].hotel_id}`);
-    return anyRows[0];
+    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no config — using shared Brevo key with platform sender`);
+    return {
+      id:          "platform-brevo-db",
+      provider:    "brevo",
+      email:       config.brevoSenderEmail,
+      sender_name: config.brevoSenderName,
+      smtp_pass:   anyRows[0].smtp_pass,
+      is_default:  true,
+    };
   }
 
   console.warn(`[Email:getHotelSmtpConfig] hotel ${hotelId} — no SMTP config found anywhere`);
