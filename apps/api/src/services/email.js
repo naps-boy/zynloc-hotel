@@ -4,33 +4,39 @@ import { config } from "../config.js";
 
 // ── SMTP config lookup ────────────────────────────────────────────────────────
 
-// Synthetic platform-level Brevo config used when a hotel has no SMTP config of its own.
-// Requires BREVO_API_KEY env var to be set on Render.
-function platformBrevoConfig() {
-  if (!config.brevoApiKey) return null;
-  return {
-    id:          "platform-brevo",
-    provider:    "brevo",
-    email:       config.brevoSenderEmail,
-    sender_name: config.brevoSenderName,
-    smtp_pass:   config.brevoApiKey,
-    is_default:  true,
-  };
-}
-
 export async function getHotelSmtpConfig(hotelId) {
+  // 1. Try hotel-specific default config
   const { rows } = await query(
     "SELECT * FROM smtp_configs WHERE hotel_id = $1 AND is_default = TRUE LIMIT 1",
     [hotelId]
   );
   if (rows[0]) return rows[0];
 
-  // No hotel-specific config — fall back to the platform Brevo account
-  const fallback = platformBrevoConfig();
-  if (fallback) {
-    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no SMTP config — using platform Brevo fallback`);
+  // 2. Env-var override (BREVO_API_KEY set on Render)
+  if (config.brevoApiKey) {
+    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no config — using env BREVO_API_KEY`);
+    return {
+      id:          "platform-brevo-env",
+      provider:    "brevo",
+      email:       config.brevoSenderEmail,
+      sender_name: config.brevoSenderName,
+      smtp_pass:   config.brevoApiKey,
+      is_default:  true,
+    };
   }
-  return fallback;
+
+  // 3. Last resort — reuse any existing Brevo config already in the database.
+  //    Since this platform shares a single Brevo account, any config has the right key.
+  const { rows: anyRows } = await query(
+    "SELECT * FROM smtp_configs WHERE provider = 'brevo' ORDER BY created_at LIMIT 1"
+  );
+  if (anyRows[0]) {
+    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no config — sharing Brevo config from hotel ${anyRows[0].hotel_id}`);
+    return anyRows[0];
+  }
+
+  console.warn(`[Email:getHotelSmtpConfig] hotel ${hotelId} — no SMTP config found anywhere`);
+  return null;
 }
 
 // ── Provider: Brevo HTTP API (port 443 — works on Render free tier) ──────────
