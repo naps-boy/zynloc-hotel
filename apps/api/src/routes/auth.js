@@ -8,6 +8,24 @@ import { asyncHandler, HttpError } from "../utils/http.js";
 import { config } from "../config.js";
 import { sendPasswordResetEmail } from "../services/email.js";
 
+// Auto-provision a default Brevo SMTP config for a newly registered hotel.
+// Runs after the transaction so a failure here doesn't roll back hotel creation.
+async function provisionDefaultSmtp(hotelId) {
+  if (!config.brevoApiKey) return; // no platform key — skip silently
+  try {
+    await query(
+      `INSERT INTO smtp_configs
+         (hotel_id, provider, label, sender_name, email, smtp_pass, is_default)
+       VALUES ($1, 'brevo', 'Default (Brevo)', $2, $3, $4, TRUE)
+       ON CONFLICT DO NOTHING`,
+      [hotelId, config.brevoSenderName, config.brevoSenderEmail, config.brevoApiKey]
+    );
+    console.log(`[Auth] Provisioned default Brevo SMTP config for hotel ${hotelId}`);
+  } catch (err) {
+    console.warn(`[Auth] Failed to provision SMTP config for hotel ${hotelId}:`, err.message);
+  }
+}
+
 export const authRouter = Router();
 
 authRouter.post("/register-manager", asyncHandler(async (req, res) => {
@@ -30,6 +48,9 @@ authRouter.post("/register-manager", asyncHandler(async (req, res) => {
     )).rows[0];
     return { hotel, staff };
   });
+
+  // Provision default SMTP config for the new hotel (non-blocking — doesn't fail registration)
+  await provisionDefaultSmtp(result.hotel.id);
 
   res.status(201).json({ ...result, token: signSession(result.staff) });
 }));

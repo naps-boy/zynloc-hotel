@@ -4,12 +4,33 @@ import { config } from "../config.js";
 
 // ── SMTP config lookup ────────────────────────────────────────────────────────
 
+// Synthetic platform-level Brevo config used when a hotel has no SMTP config of its own.
+// Requires BREVO_API_KEY env var to be set on Render.
+function platformBrevoConfig() {
+  if (!config.brevoApiKey) return null;
+  return {
+    id:          "platform-brevo",
+    provider:    "brevo",
+    email:       config.brevoSenderEmail,
+    sender_name: config.brevoSenderName,
+    smtp_pass:   config.brevoApiKey,
+    is_default:  true,
+  };
+}
+
 export async function getHotelSmtpConfig(hotelId) {
   const { rows } = await query(
     "SELECT * FROM smtp_configs WHERE hotel_id = $1 AND is_default = TRUE LIMIT 1",
     [hotelId]
   );
-  return rows[0] || null;
+  if (rows[0]) return rows[0];
+
+  // No hotel-specific config — fall back to the platform Brevo account
+  const fallback = platformBrevoConfig();
+  if (fallback) {
+    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no SMTP config — using platform Brevo fallback`);
+  }
+  return fallback;
 }
 
 // ── Provider: Brevo HTTP API (port 443 — works on Render free tier) ──────────
