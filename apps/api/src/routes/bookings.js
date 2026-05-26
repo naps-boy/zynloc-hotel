@@ -50,10 +50,11 @@ bookingsRouter.post("/", asyncHandler(async (req, res) => {
   res.status(201).json(booking);
 }));
 
-// TEMP DEBUG: check what SMTP config getHotelSmtpConfig resolves to
+// TEMP DEBUG: check what SMTP config getHotelSmtpConfig resolves to + test it
 bookingsRouter.get("/debug-smtp", asyncHandler(async (req, res) => {
+  const { sendTestEmail } = await import("../services/email.js");
   const cfg = await getHotelSmtpConfig(req.user.hotelId);
-  res.json({
+  const info = {
     hotelId: req.user.hotelId,
     found: !!cfg,
     configId: cfg?.id || null,
@@ -61,7 +62,12 @@ bookingsRouter.get("/debug-smtp", asyncHandler(async (req, res) => {
     sender: cfg?.email || null,
     keyLen: cfg?.smtp_pass?.length || 0,
     keyPrefix: cfg?.smtp_pass?.substring(0, 12) || null,
-  });
+  };
+  if (cfg) {
+    const testResult = await sendTestEmail(cfg, "dekingnapo123@gmail.com");
+    info.testResult = testResult;
+  }
+  res.json(info);
 }));
 
 // Resend confirmation email
