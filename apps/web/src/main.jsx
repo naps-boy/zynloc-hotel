@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Html5Qrcode } from "html5-qrcode";
+import { BrowserQRCodeReader } from "@zxing/browser";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid,
   ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -319,59 +320,138 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 }
 
 // ── QrScanner ─────────────────────────────────────────────────────────────────
-// Uses Html5Qrcode.scanFile() + <input capture="environment">.
-// capture="environment" opens the native back camera on iOS/Android with zero
-// browser permission prompts. Html5Qrcode.scanFile() handles large HEIC photos,
-// image scaling, and correct canvas timing — fixing all issues jsQR had.
+// PRIMARY: Live continuous video via @zxing/browser BrowserQRCodeReader.
+// facingMode: { ideal: "environment" } works on Samsung multi-lens cameras.
+// FALLBACK: Html5Qrcode.scanFile() for image upload when camera is unavailable.
+// The hidden div used by Html5Qrcode is rendered inside this component itself.
 
 function QrScanner({ onScan, onClose }) {
-  const [error, setError] = useState(null);
+  const videoRef = useRef(null);
+  const [showFileFallback, setShowFileFallback] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
+  const [fileError, setFileError] = useState(null);
   const [processing, setProcessing] = useState(false);
+  // Unique ID for the html5-qrcode hidden container rendered inside this component
+  const [qrDivId] = useState(() => `qr-file-${Math.random().toString(36).slice(2)}`);
 
+  // Start live camera scanning on mount
+  useEffect(() => {
+    if (showFileFallback) return;
+    let stopped = false;
+    const controlsRef = { current: null };
+
+    async function startCamera() {
+      try {
+        const reader = new BrowserQRCodeReader();
+        controlsRef.current = await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: "environment" } } },
+          videoRef.current,
+          (result) => {
+            if (stopped || !result) return;
+            stopped = true;
+            try { controlsRef.current?.stop(); } catch {}
+            onScan(result.getText());
+          }
+        );
+      } catch {
+        if (!stopped) {
+          setCameraError("Camera unavailable on this device.");
+          setShowFileFallback(true);
+        }
+      }
+    }
+
+    startCamera();
+
+    return () => {
+      stopped = true;
+      try { controlsRef.current?.stop(); } catch {}
+    };
+  }, [showFileFallback]);
+
+  // File decode via Html5Qrcode (image upload fallback)
   async function decodeFile(file) {
-    setError(null);
+    setFileError(null);
     setProcessing(true);
-    const scanner = new Html5Qrcode("qr-reader-hidden");
+    const scanner = new Html5Qrcode(qrDivId);
     try {
       const result = await scanner.scanFile(file, /* showImage= */ false);
-      onScan(result);  // success — parent unmounts this component
+      onScan(result);
     } catch {
-      setError("QR code not detected. Make sure the QR code is clear and well-lit, then try again.");
+      setFileError("QR code not detected. Make sure the image is clear and try again.");
       setProcessing(false);
     } finally {
       try { scanner.clear(); } catch {}
     }
   }
 
-  function handleChange(e) {
+  function handleFileChange(e) {
     const file = e.target.files?.[0];
-    e.target.value = "";  // reset so same file can be re-selected on retry
+    e.target.value = "";
     if (file) decodeFile(file);
   }
 
   return (
     <div className="qr-scanner-shell">
+      {/* Hidden container required by Html5Qrcode for file scanning */}
+      <div id={qrDivId} style={{ display: "none" }} />
+
       <button className="close-camera" onClick={onClose}><X size={24} /></button>
-      <QrCode size={52} style={{ color: "var(--gold)", flexShrink: 0 }} />
-      {processing ? (
-        <p className="qr-hint">Reading QR code…</p>
+
+      {!showFileFallback ? (
+        // ── Live camera view ──────────────────────────────────────────────
+        <>
+          <div className="qr-viewfinder">
+            <video ref={videoRef} className="qr-video" playsInline muted autoPlay />
+            <div className="qr-frame" />
+          </div>
+          <p className="qr-hint">Point camera at the QR code</p>
+          <button
+            className="qr-upload-label"
+            style={{ marginTop: 8, cursor: "pointer" }}
+            onClick={() => setShowFileFallback(true)}
+          >
+            <Upload size={16} /><span>Use image instead</span>
+          </button>
+        </>
       ) : (
+        // ── File upload fallback ──────────────────────────────────────────
         <div className="qr-file-btns">
-          {error && <p className="qr-error">{error}</p>}
-          {/* Primary: opens native back camera on iOS/Android — no permission prompt */}
-          <label className="qr-capture-label">
-            <Camera size={20} /><span>Take Photo of QR Code</span>
-            <input type="file" accept="image/*" capture="environment" onChange={handleChange} />
-          </label>
-          {/* Secondary: gallery / screenshot / file system */}
-          <label className="qr-upload-label">
-            <Upload size={18} /><span>Upload from Gallery</span>
-            <input type="file" accept="image/*" onChange={handleChange} />
-          </label>
-          <button className="ghost" style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.25)", marginTop: 4 }} onClick={onClose}>Cancel</button>
+          {cameraError && <p className="qr-error">📷 {cameraError}</p>}
+          {fileError && <p className="qr-error">{fileError}</p>}
+          {processing ? (
+            <p className="qr-hint">Reading QR code…</p>
+          ) : (
+            <>
+              <label className="qr-capture-label">
+                <Camera size={20} /><span>Take Photo of QR Code</span>
+                <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} />
+              </label>
+              <label className="qr-upload-label">
+                <Upload size={18} /><span>Upload from Gallery</span>
+                <input type="file" accept="image/*" onChange={handleFileChange} />
+              </label>
+              {!cameraError && (
+                <button
+                  className="ghost"
+                  style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.25)" }}
+                  onClick={() => { setShowFileFallback(false); setFileError(null); }}
+                >
+                  <Camera size={14} /> Try live camera
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
-      <p className="qr-hint">Take a photo of the QR code or upload a screenshot</p>
+
+      <button
+        className="ghost"
+        style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.25)", marginTop: 4 }}
+        onClick={onClose}
+      >
+        Cancel
+      </button>
     </div>
   );
 }
@@ -1449,69 +1529,169 @@ function MgrAccessLog({ data }) {
 }
 
 function MgrMessages({ api, data, reload }) {
+  const [selectedGuestId, setSelectedGuestId] = useState(null);
   const [body, setBody] = useState("");
-  const [guestId, setGuestId] = useState("");
   const endRef = useRef(null);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [data.messages]);
+  // Group messages by guest — sorted oldest-first within each thread
+  const conversations = useMemo(() => {
+    const map = new Map();
+    // Seed map with guests who have at least one message
+    for (const m of data.messages) {
+      if (!m.guest_id) continue;
+      if (!map.has(m.guest_id)) {
+        const guest = data.guests.find(g => g.id === m.guest_id) || { id: m.guest_id, name: m.guest_name || "Guest" };
+        map.set(m.guest_id, { guest, messages: [] });
+      }
+      map.get(m.guest_id).messages.push(m);
+    }
+    // Sort messages within each thread oldest first
+    for (const conv of map.values()) {
+      conv.messages.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    }
+    // Sort threads by most recent message descending
+    return Array.from(map.values()).sort((a, b) => {
+      const aLast = a.messages[a.messages.length - 1]?.created_at || 0;
+      const bLast = b.messages[b.messages.length - 1]?.created_at || 0;
+      return new Date(bLast) - new Date(aLast);
+    });
+  }, [data.messages, data.guests]);
+
+  const selectedConv = conversations.find(c => c.guest.id === selectedGuestId) || null;
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [selectedConv?.messages?.length, selectedGuestId]);
+
+  // Auto-select first conversation when list loads
+  useEffect(() => {
+    if (!selectedGuestId && conversations.length > 0) {
+      setSelectedGuestId(conversations[0].guest.id);
+    }
+  }, [conversations.length]);
 
   async function send(e) {
     e.preventDefault();
-    if (!body.trim()) return;
-    await api.request("/api/messages", { method: "POST", body: JSON.stringify({ body, guestId: guestId || undefined, broadcast: !guestId }) });
-    setBody(""); reload();
+    if (!body.trim() || !selectedGuestId) return;
+    try {
+      await api.request("/api/messages", {
+        method: "POST",
+        body: JSON.stringify({ body, guestId: selectedGuestId })
+      });
+      setBody("");
+      reload();
+    } catch {}
   }
 
-  const msgs = [...data.messages].reverse();
-
   return (
-    <section className="split">
-      <div className="panel stack">
-        <form className="stack" onSubmit={send}>
-          <h2>Send message</h2>
-          <select value={guestId} onChange={e => setGuestId(e.target.value)}>
-            <option value="">All current guests</option>
-            {data.guests.map(g => <option key={g.id} value={g.id}>{g.name} · Room {g.room_number}</option>)}
-          </select>
-          <textarea placeholder="Message…" value={body} onChange={e => setBody(e.target.value)} rows={3} />
-          <button className="primary"><Send size={18} />Send</button>
-        </form>
-      </div>
-      <div className="panel stack" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <h2>Conversation</h2>
-        <div className="messages-list" style={{ flex: 1, overflowY: "auto" }}>
-          {msgs.map(m => {
-            const isSelf = m.sender === "staff";
-            return (
-              <div className={`message-bubble ${isSelf ? "guest" : "staff"}`} key={m.id}>
-                <span className="msg-label">{isSelf ? "You" : (m.guest_name || "Guest")}</span>
-                <div className="bubble">{m.body}</div>
-                <span className="ts">{fmtTime(m.created_at)}</span>
-              </div>
-            );
-          })}
-          <div ref={endRef} />
+    <div className="chat-shell">
+      {/* ── Left sidebar: thread list ─────────────────────────────────── */}
+      <div className="chat-sidebar">
+        <div className="chat-sidebar-header">
+          <MessageSquare size={16} /> Conversations
         </div>
-        {!msgs.length && <p className="muted">No messages yet</p>}
+        {conversations.length === 0 && (
+          <p className="muted" style={{ padding: "16px 12px", fontSize: 13 }}>No messages yet</p>
+        )}
+        {conversations.map(conv => {
+          const lastMsg = conv.messages[conv.messages.length - 1];
+          return (
+            <div
+              key={conv.guest.id}
+              className={`chat-thread-item ${selectedGuestId === conv.guest.id ? "active" : ""}`}
+              onClick={() => setSelectedGuestId(conv.guest.id)}
+            >
+              <div className="chat-thread-avatar">
+                {conv.guest.selfie_url
+                  ? <img src={conv.guest.selfie_url} alt={conv.guest.name} />
+                  : <span>{conv.guest.name?.[0] || "?"}</span>
+                }
+              </div>
+              <div className="chat-thread-info">
+                <strong>{conv.guest.name}</strong>
+                <p className="chat-thread-preview">{lastMsg?.body?.slice(0, 38) || ""}</p>
+              </div>
+              <span className="chat-thread-time">{fmtTime(lastMsg?.created_at)}</span>
+            </div>
+          );
+        })}
       </div>
-    </section>
+
+      {/* ── Right: chat area ──────────────────────────────────────────── */}
+      <div className="chat-main">
+        {selectedConv ? (
+          <>
+            <div className="chat-main-header">
+              <div className="chat-thread-avatar sm">
+                {selectedConv.guest.selfie_url
+                  ? <img src={selectedConv.guest.selfie_url} alt={selectedConv.guest.name} />
+                  : <span>{selectedConv.guest.name?.[0] || "?"}</span>
+                }
+              </div>
+              <div>
+                <strong>{selectedConv.guest.name}</strong>
+                {selectedConv.guest.room_number && (
+                  <small className="muted"> · Room {selectedConv.guest.room_number}</small>
+                )}
+              </div>
+            </div>
+
+            <div className="chat-messages">
+              {selectedConv.messages.map(m => {
+                const isOutgoing = m.sender === "staff";
+                const senderLabel = isOutgoing
+                  ? (m.sender_display_name || m.staff_display_name || m.staff_name || "Staff")
+                  : (m.guest_name || "Guest");
+                return (
+                  <div key={m.id} className={`chat-msg-row ${isOutgoing ? "outgoing" : "incoming"}`}>
+                    <span className="chat-msg-sender">{senderLabel}</span>
+                    <div className={`chat-msg-bubble ${isOutgoing ? "outgoing" : "incoming"}`}>
+                      {m.body}
+                    </div>
+                    <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
+                  </div>
+                );
+              })}
+              <div ref={endRef} />
+            </div>
+
+            <form className="chat-input-bar" onSubmit={send}>
+              <input
+                placeholder="Type a message…"
+                value={body}
+                onChange={e => setBody(e.target.value)}
+              />
+              <button type="submit" className="chat-send-btn" disabled={!body.trim()}>
+                <Send size={18} />
+              </button>
+            </form>
+          </>
+        ) : (
+          <div className="chat-empty-state">
+            <MessageSquare size={40} style={{ color: "var(--muted)" }} />
+            <p className="muted">Select a conversation</p>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
 function MgrStaff({ api, data, reload, show }) {
-  const [form, setForm] = useState({ name: "", email: "", password: "staff123!", role: "housekeeping", zone: "" });
+  const [form, setForm] = useState({ name: "", email: "", displayName: "", password: "staff123!", role: "housekeeping", zone: "" });
   async function add(e) {
     e.preventDefault();
     try {
       await api.request("/api/staff", { method: "POST", body: JSON.stringify(form) });
-      setForm(f => ({ ...f, name: "", email: "" }));
+      setForm(f => ({ ...f, name: "", email: "", displayName: "" }));
       reload(); show("Staff added", "success");
     } catch (err) { show(err.message, "error"); }
   }
   return (
     <GridPage form={
       <form className="inline-form" onSubmit={add}>
-        <input required placeholder="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+        <input required placeholder="Full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+        <input placeholder="Display name (chat)" value={form.displayName} onChange={e => setForm({ ...form, displayName: e.target.value })} />
         <input required type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
         <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
           {["housekeeping","security","receptionist","manager"].map(r => <option key={r}>{r}</option>)}
@@ -1520,7 +1700,12 @@ function MgrStaff({ api, data, reload, show }) {
       </form>
     }>
       {data.staff.map(s => (
-        <article className="card" key={s.id}><ShieldCheck size={18} /><h3>{s.name}</h3><p>{s.role} · {s.zone || "All zones"}</p></article>
+        <article className="card" key={s.id}>
+          <ShieldCheck size={18} />
+          <h3>{s.name}</h3>
+          {s.display_name && <p className="muted" style={{ fontSize: 12 }}>Chat: {s.display_name}</p>}
+          <p>{s.role} · {s.zone || "All zones"}</p>
+        </article>
       ))}
     </GridPage>
   );
@@ -2334,7 +2519,10 @@ function GuestMessages({ messages, gReq, reload, show, lang, booking }) {
   const endRef = useRef(null);
   const hotelName = booking?.hotel_name || "Hotel";
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  // Messages arrive newest-first from API — display oldest first
+  const msgs = useMemo(() => [...messages].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)), [messages]);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length]);
 
   async function send(e) {
     e.preventDefault();
@@ -2343,30 +2531,59 @@ function GuestMessages({ messages, gReq, reload, show, lang, booking }) {
     catch (err) { show(err.message, "error"); }
   }
 
-  const msgs = [...messages].reverse();
-
   return (
-    <div className="guest-messages">
-      <div className="chat-header">
-        <MessageSquare size={16} />
-        <span>Conversation with {hotelName}</span>
+    <div className="guest-chat-shell">
+      {/* ── Header ──────────────────────────────────────────────────── */}
+      <div className="guest-chat-header">
+        <div className="guest-chat-hotel-avatar">
+          {booking?.logo_url
+            ? <img src={booking.logo_url} alt={hotelName} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+            : <Hotel size={18} />
+          }
+        </div>
+        <div>
+          <strong>{hotelName}</strong>
+          <br />
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>Hotel Staff</small>
+        </div>
       </div>
-      <div className="messages-list">
+
+      {/* ── Message list ────────────────────────────────────────────── */}
+      <div className="guest-chat-messages">
+        {msgs.length === 0 && (
+          <div className="guest-chat-empty">
+            <MessageSquare size={32} style={{ color: "var(--muted)" }} />
+            <p className="muted">No messages yet. Say hello!</p>
+          </div>
+        )}
         {msgs.map(m => {
           const isGuest = m.sender === "guest";
+          const senderLabel = isGuest
+            ? (t(lang, "you") || "You")
+            : (m.sender_display_name || m.staff_display_name || m.staff_name || hotelName);
           return (
-            <div key={m.id} className={`message-bubble ${isGuest ? "guest" : "staff"}`}>
-              <span className="msg-label">{isGuest ? t(lang, "you") || "You" : hotelName}</span>
-              <div className="bubble">{m.body}</div>
-              <span className="ts">{fmtTime(m.created_at)}</span>
+            <div key={m.id} className={`guest-chat-msg ${isGuest ? "outgoing" : "incoming"}`}>
+              <span className="guest-chat-sender">{senderLabel}</span>
+              <div className={`guest-chat-bubble ${isGuest ? "outgoing" : "incoming"}`}>
+                {m.body}
+              </div>
+              <span className="guest-chat-time">{fmtTime(m.created_at)}</span>
             </div>
           );
         })}
         <div ref={endRef} />
       </div>
-      <form className="message-input-row" onSubmit={send}>
-        <input placeholder={t(lang, "typeMessage") || "Type a message…"} value={body} onChange={e => setBody(e.target.value)} />
-        <button type="submit" className="primary"><Send size={16} /></button>
+
+      {/* ── Input bar ───────────────────────────────────────────────── */}
+      <form className="guest-chat-input" onSubmit={send}>
+        <input
+          placeholder={t(lang, "typeMessage") || "Type a message…"}
+          value={body}
+          onChange={e => setBody(e.target.value)}
+        />
+        <button type="submit" className="guest-chat-send" disabled={!body.trim()}>
+          <Send size={18} />
+        </button>
       </form>
     </div>
   );

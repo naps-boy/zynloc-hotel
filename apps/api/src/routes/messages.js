@@ -10,7 +10,7 @@ messagesRouter.use(requireAuth);
 
 messagesRouter.get("/", asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `SELECT m.*, g.name guest_name, s.name staff_name
+    `SELECT m.*, g.name guest_name, s.name staff_name, s.display_name staff_display_name
        FROM messages m
        LEFT JOIN guests g ON g.id = m.guest_id
        LEFT JOIN staff s ON s.id = m.staff_id
@@ -27,10 +27,18 @@ messagesRouter.post("/", asyncHandler(async (req, res) => {
     body: z.string().min(1),
     broadcast: z.boolean().default(false)
   }).parse(req.body);
+
+  // Capture sender display name at send time for historical accuracy
+  const { rows: staffRows } = await query(
+    "SELECT display_name, name FROM staff WHERE id = $1",
+    [req.user.staffId]
+  );
+  const senderDisplayName = staffRows[0]?.display_name || staffRows[0]?.name || "Staff";
+
   const { rows } = await query(
-    `INSERT INTO messages (hotel_id, guest_id, staff_id, sender, body, broadcast)
-     VALUES ($1, $2, $3, 'staff', $4, $5) RETURNING *`,
-    [req.user.hotelId, body.guestId, req.user.staffId, body.body, body.broadcast]
+    `INSERT INTO messages (hotel_id, guest_id, staff_id, sender, body, broadcast, sender_display_name)
+     VALUES ($1, $2, $3, 'staff', $4, $5, $6) RETURNING *`,
+    [req.user.hotelId, body.guestId, req.user.staffId, body.body, body.broadcast, senderDisplayName]
   );
   emitHotel(req.user.hotelId, "messages:new", rows[0]);
   res.status(201).json(rows[0]);

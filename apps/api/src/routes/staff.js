@@ -10,7 +10,7 @@ staffRouter.use(requireAuth);
 
 staffRouter.get("/", asyncHandler(async (req, res) => {
   const { rows } = await query(
-    "SELECT id, hotel_id, name, email, role, zone, created_at FROM staff WHERE hotel_id = $1 ORDER BY name",
+    "SELECT id, hotel_id, name, email, role, zone, display_name, created_at FROM staff WHERE hotel_id = $1 ORDER BY name",
     [req.user.hotelId]
   );
   res.json(rows);
@@ -22,13 +22,16 @@ staffRouter.post("/", requireRole("manager"), asyncHandler(async (req, res) => {
     email: z.string().email(),
     password: z.string().min(8),
     role: z.enum(["housekeeping", "security", "receptionist", "manager"]),
-    zone: z.string().optional().default("")
+    zone: z.string().optional().default(""),
+    displayName: z.string().optional().default("")
   }).parse(req.body);
   const { rows } = await query(
-    `INSERT INTO staff (hotel_id, name, email, password_hash, role, zone)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, hotel_id, name, email, role, zone, created_at`,
-    [req.user.hotelId, body.name, body.email.toLowerCase(), await bcrypt.hash(body.password, 12), body.role, body.zone]
+    `INSERT INTO staff (hotel_id, name, email, password_hash, role, zone, display_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, hotel_id, name, email, role, zone, display_name, created_at`,
+    [req.user.hotelId, body.name, body.email.toLowerCase(),
+     await bcrypt.hash(body.password, 12), body.role, body.zone,
+     body.displayName || null]
   );
   res.status(201).json(rows[0]);
 }));
