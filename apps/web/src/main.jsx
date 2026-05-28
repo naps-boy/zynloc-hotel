@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { Html5Qrcode } from "html5-qrcode";
-import { BrowserQRCodeReader } from "@zxing/browser";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid,
   ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -323,7 +321,19 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 // PRIMARY: Live continuous video via @zxing/browser BrowserQRCodeReader.
 // facingMode: { ideal: "environment" } works on Samsung multi-lens cameras.
 // FALLBACK: Html5Qrcode.scanFile() for image upload when camera is unavailable.
-// The hidden div used by Html5Qrcode is rendered inside this component itself.
+// Rank a camera device by label — higher score = more likely to be the main back camera.
+// Samsung/Android phones expose labels like "camera2 0, facing back", "0, back-facing", etc.
+function rankCamera(label) {
+  const l = (label || "").toLowerCase();
+  if (l.includes("front") || l.includes("selfie") || l.includes("facing front")) return -10;
+  if (l.includes("ultrawide") || l.includes("ultra wide") || l.includes("0.6x")) return 1;
+  if (l.includes("telephoto") || l.includes("zoom") || l.includes("2x") || l.includes("3x")) return 3;
+  if (l.includes("back") || l.includes("rear") || l.includes("environment") || l.includes("facing back")) return 10;
+  // camera2 index 0 is typically the main back camera on Android
+  const m = l.match(/camera2?\s*(\d)/);
+  if (m) return m[1] === "0" ? 8 : 4;
+  return 5; // unknown — assume back
+}
 
 function QrScanner({ onScan, onClose }) {
   const videoRef = useRef(null);
@@ -331,10 +341,10 @@ function QrScanner({ onScan, onClose }) {
   const [cameraError, setCameraError] = useState(null);
   const [fileError, setFileError] = useState(null);
   const [processing, setProcessing] = useState(false);
-  // Unique ID for the html5-qrcode hidden container rendered inside this component
+  const [devices, setDevices] = useState([]);
+  const [deviceIdx, setDeviceIdx] = useState(0);
   const [qrDivId] = useState(() => `qr-file-${Math.random().toString(36).slice(2)}`);
 
-  // Start live camera scanning on mount
   useEffect(() => {
     if (showFileFallback) return;
     let stopped = false;
@@ -342,9 +352,33 @@ function QrScanner({ onScan, onClose }) {
 
     async function startCamera() {
       try {
+        // Dynamic import — not in initial bundle
+        const { BrowserQRCodeReader } = await import("@zxing/browser");
+
+        // Step 1: getUserMedia first — required on Chrome/Android to populate device labels
+        let seedStream = null;
+        try {
+          seedStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
+        } catch {}
+
+        // Step 2: enumerate video devices now that we have permission
+        const allDevices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = allDevices.filter(d => d.kind === "videoinput");
+
+        // Stop the seed stream — we'll open the chosen device next
+        seedStream?.getTracks().forEach(t => t.stop());
+
+        if (videoDevices.length === 0) throw new Error("No camera found");
+
+        // Step 3: sort by rank (best first)
+        const ranked = [...videoDevices].sort((a, b) => rankCamera(b.label) - rankCamera(a.label));
+        if (!stopped) setDevices(ranked);
+
+        const chosenDevice = ranked[deviceIdx] || ranked[0];
         const reader = new BrowserQRCodeReader();
-        controlsRef.current = await reader.decodeFromConstraints(
-          { video: { facingMode: { ideal: "environment" } } },
+
+        controlsRef.current = await reader.decodeFromVideoDevice(
+          chosenDevice.deviceId,
           videoRef.current,
           (result) => {
             if (stopped || !result) return;
@@ -353,9 +387,9 @@ function QrScanner({ onScan, onClose }) {
             onScan(result.getText());
           }
         );
-      } catch {
+      } catch (err) {
         if (!stopped) {
-          setCameraError("Camera unavailable on this device.");
+          setCameraError("Camera unavailable: " + (err.message || "permission denied"));
           setShowFileFallback(true);
         }
       }
@@ -367,21 +401,23 @@ function QrScanner({ onScan, onClose }) {
       stopped = true;
       try { controlsRef.current?.stop(); } catch {}
     };
-  }, [showFileFallback]);
+  }, [showFileFallback, deviceIdx]);
 
-  // File decode via Html5Qrcode (image upload fallback)
   async function decodeFile(file) {
     setFileError(null);
     setProcessing(true);
-    const scanner = new Html5Qrcode(qrDivId);
     try {
-      const result = await scanner.scanFile(file, /* showImage= */ false);
-      onScan(result);
+      const { Html5Qrcode } = await import("html5-qrcode");
+      const scanner = new Html5Qrcode(qrDivId);
+      try {
+        const result = await scanner.scanFile(file, false);
+        onScan(result);
+      } finally {
+        try { scanner.clear(); } catch {}
+      }
     } catch {
       setFileError("QR code not detected. Make sure the image is clear and try again.");
       setProcessing(false);
-    } finally {
-      try { scanner.clear(); } catch {}
     }
   }
 
@@ -393,29 +429,36 @@ function QrScanner({ onScan, onClose }) {
 
   return (
     <div className="qr-scanner-shell">
-      {/* Hidden container required by Html5Qrcode for file scanning */}
       <div id={qrDivId} style={{ display: "none" }} />
-
       <button className="close-camera" onClick={onClose}><X size={24} /></button>
 
       {!showFileFallback ? (
-        // ── Live camera view ──────────────────────────────────────────────
         <>
           <div className="qr-viewfinder">
             <video ref={videoRef} className="qr-video" playsInline muted autoPlay />
             <div className="qr-frame" />
           </div>
           <p className="qr-hint">Point camera at the QR code</p>
-          <button
-            className="qr-upload-label"
-            style={{ marginTop: 8, cursor: "pointer" }}
-            onClick={() => setShowFileFallback(true)}
-          >
-            <Upload size={16} /><span>Use image instead</span>
-          </button>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            {devices.length > 1 && (
+              <button
+                className="qr-upload-label"
+                style={{ cursor: "pointer" }}
+                onClick={() => setDeviceIdx(i => (i + 1) % devices.length)}
+              >
+                <Camera size={15} /><span>Switch camera</span>
+              </button>
+            )}
+            <button
+              className="qr-upload-label"
+              style={{ cursor: "pointer" }}
+              onClick={() => setShowFileFallback(true)}
+            >
+              <Upload size={15} /><span>Use image</span>
+            </button>
+          </div>
         </>
       ) : (
-        // ── File upload fallback ──────────────────────────────────────────
         <div className="qr-file-btns">
           {cameraError && <p className="qr-error">📷 {cameraError}</p>}
           {fileError && <p className="qr-error">{fileError}</p>}
@@ -843,21 +886,22 @@ function ManagerDashboard({ api, initialSettings }) {
     // restore last tab from hash on hard-reload
     const hash = window.location.hash.replace("#", "");
     const valid = ["overview","rooms","bookings","guests","facilities","packages",
-      "service-requests","access-log","messages","staff","analytics","settings"];
+      "service-requests","access-log","messages","staff","analytics","settings","alerts"];
     return valid.includes(hash) ? hash : "overview";
   });
   const [me, setMe] = useState(null);
   const [data, setData] = useState({
     rooms: [], bookings: [], guests: [], facilities: [], packages: [],
     messages: [], notifications: [], analytics: null, settings: initialSettings,
-    staff: [], accessLog: [], serviceRequests: []
+    staff: [], accessLog: [], serviceRequests: [],
+    alerts: { unresolved: [], resolved: [] },
   });
-  const [arrivals, setArrivals] = useState([]);
   const [sessionCount, setSessionCount] = useState(1);
   const { toast, show } = useToast();
 
   const NAV = [
     ["overview", BarChart3, "Overview"],
+    ["alerts", Bell, "Alerts"],
     ["rooms", BedDouble, "Rooms"],
     ["bookings", CalendarDays, "Bookings"],
     ["guests", Users, "Guests"],
@@ -911,6 +955,7 @@ function ManagerDashboard({ api, initialSettings }) {
       api.request("/api/staff"),
       api.request("/api/access-log"),
       api.request("/api/service-requests"),
+      api.request("/api/alerts"),
     ]);
     const v = i => settled[i].status === "fulfilled" ? settled[i].value : null;
     setMe(v(0));
@@ -920,6 +965,7 @@ function ManagerDashboard({ api, initialSettings }) {
       messages: v(6) || [], notifications: v(7) || [],
       analytics: v(8), settings: v(9), staff: v(10) || [],
       accessLog: v(11) || [], serviceRequests: v(12) || [],
+      alerts: v(13) || { unresolved: [], resolved: [] },
     });
   }
 
@@ -943,10 +989,10 @@ function ManagerDashboard({ api, initialSettings }) {
     socket.on("connect", () => socket.emit("hotel:join", hotelId));
     socket.emit("hotel:join", hotelId);
     ["rooms:changed","bookings:changed","messages:new","notifications:new",
-     "service-requests:new","service-requests:changed"].forEach(ev => socket.on(ev, doLoad));
+     "service-requests:new","service-requests:changed","new:alert"].forEach(ev => socket.on(ev, doLoad));
     socket.on("access:denied", ev => show(`Access denied: ${ev.guestName} at ${ev.facilityName}`, "warning"));
     socket.on("guest:arrived", ev => {
-      setArrivals(prev => [...prev, { ...ev, arrivedAt: Date.now() }]);
+      doLoad();
       show(`${ev.guestName} has arrived at reception!`, "success");
     });
     // BUG 2: listen for live session count from server
@@ -964,11 +1010,16 @@ function ManagerDashboard({ api, initialSettings }) {
       <aside className="sidebar">
         <div className="brand-lockup"><Hotel size={20} /><span>{me?.hotel_name || "Zynloc"}</span></div>
         <nav>
-          {NAV.map(([key, Icon, label]) => (
-            <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
-              <Icon size={16} />{label}
-            </button>
-          ))}
+          {NAV.map(([key, Icon, label]) => {
+            const badge = key === "alerts" ? data.alerts.unresolved.length : 0;
+            return (
+              <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
+                <Icon size={16} />
+                <span style={{ flex: 1 }}>{label}</span>
+                {badge > 0 && <span className="nav-badge">{badge}</span>}
+              </button>
+            );
+          })}
         </nav>
         <button className="logout" onClick={api.logout}><LogOut size={16} />Logout</button>
       </aside>
@@ -997,7 +1048,8 @@ function ManagerDashboard({ api, initialSettings }) {
 
         <section className="dashboard-frame">
           <div className="main-pane">
-            {active === "overview" && <MgrOverview data={data} />}
+            {active === "overview" && <MgrOverview data={data} onNav={navigate} />}
+            {active === "alerts" && <MgrAlerts api={api} data={data} reload={loadAll} show={show} />}
             {active === "rooms" && <MgrRooms api={api} data={data} reload={loadAll} show={show} />}
             {active === "bookings" && <MgrBookings api={api} data={data} reload={loadAll} show={show} />}
             {active === "guests" && <MgrGuests api={api} data={data} reload={loadAll} show={show} />}
@@ -1010,43 +1062,6 @@ function ManagerDashboard({ api, initialSettings }) {
             {active === "analytics" && <MgrAnalytics api={api} data={data} />}
             {active === "settings" && <MgrSettings api={api} data={data} reload={loadAll} show={show} />}
           </div>
-          <aside className="alerts-rail">
-            <h2>Live alerts</h2>
-            {arrivals.map((a, i) => (
-              <div className="arrival-card" key={`${a.bookingId}-${a.arrivedAt}`}>
-                <div className="arrival-card-header">
-                  {a.selfieUrl
-                    ? <img src={a.selfieUrl} alt={a.guestName} className="arrival-photo" />
-                    : <div className="arrival-no-photo"><Users size={20} /></div>
-                  }
-                  <div className="arrival-info">
-                    <strong>{a.guestName}</strong>
-                    <small>Room {a.roomNumber} · arrived</small>
-                  </div>
-                </div>
-                <button className="arrival-confirm-btn" onClick={async () => {
-                  try {
-                    await api.request(`/api/guest/${a.qrToken}/checkin`, { method: "POST" });
-                    setArrivals(prev => prev.filter((_, j) => j !== i));
-                    show(`${a.guestName} checked in to Room ${a.roomNumber} ✓`, "success");
-                    loadAll();
-                  } catch (err) { show(err.message, "error"); }
-                }}>
-                  <Check size={14} />Confirm Check-In
-                </button>
-                <button className="arrival-dismiss-btn" onClick={() => setArrivals(prev => prev.filter((_, j) => j !== i))}>
-                  Dismiss
-                </button>
-              </div>
-            ))}
-            {data.notifications.slice(0, 6).map(n => (
-              <article className="notice compact" key={n.id}>
-                <Bell size={14} />
-                <div><strong>{n.title}</strong><p>{n.body}</p></div>
-              </article>
-            ))}
-            {!arrivals.length && !data.notifications.length && <p className="muted">No alerts</p>}
-          </aside>
         </section>
       </section>
 
@@ -1064,12 +1079,13 @@ function ManagerDashboard({ api, initialSettings }) {
   );
 }
 
-function MgrOverview({ data }) {
+function MgrOverview({ data, onNav }) {
   const occupied = data.rooms.filter(r => r.status === "occupied").length;
   const pending = data.bookings.filter(b => b.status === "pending").length;
   const checkedIn = data.bookings.filter(b => b.status === "checked_in").length;
   const openReqs = data.serviceRequests.filter(r => r.status === "open").length;
   const revenue = Math.round((data.analytics?.revenueByRoom || []).reduce((s, r) => s + Number(r.revenue || 0), 0));
+  const unresolvedAlerts = data.alerts.unresolved.length;
   return (
     <div className="overview-grid">
       <div className="stat-card"><strong>{occupied}</strong><span>Occupied rooms</span></div>
@@ -1077,6 +1093,12 @@ function MgrOverview({ data }) {
       <div className="stat-card"><strong>{checkedIn}</strong><span>Active guests</span></div>
       <div className="stat-card"><strong>{openReqs}</strong><span>Open service requests</span></div>
       <div className="stat-card wide"><strong>${revenue}</strong><span>Total revenue</span></div>
+      {unresolvedAlerts > 0 && (
+        <div className="alert-overview-banner wide" onClick={() => onNav?.("alerts")}>
+          <Bell size={18} />
+          <span><strong>{unresolvedAlerts}</strong> unresolved alert{unresolvedAlerts !== 1 ? "s" : ""} — click to view</span>
+        </div>
+      )}
       <article className="panel col-span-2">
         <h2>Recent bookings</h2>
         <div className="table">
@@ -1524,6 +1546,116 @@ function MgrAccessLog({ data }) {
         </div>
       ))}
       {!data.accessLog.length && <p className="muted">No access events yet</p>}
+    </div>
+  );
+}
+
+// ── Alerts Tab ────────────────────────────────────────────────────────────────
+
+const ALERT_ICONS = {
+  arrival:         "🚶",
+  checkin:         "✅",
+  checkout:        "🚪",
+  access_denied:   "🔒",
+  service_request: "🛎️",
+  late_checkout:   "⏰",
+};
+
+function timeAgo(dateStr) {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function MgrAlerts({ api, data, reload, show }) {
+  const [resolvedOpen, setResolvedOpen] = useState(false);
+  const [busy, setBusy] = useState(null);
+
+  async function resolve(id) {
+    setBusy(id);
+    try {
+      await api.request(`/api/alerts/${id}/resolve`, { method: "POST" });
+      reload();
+    } catch (err) { show(err.message, "error"); }
+    setBusy(null);
+  }
+
+  async function unresolve(id) {
+    setBusy(id);
+    try {
+      await api.request(`/api/alerts/${id}/unresolve`, { method: "POST" });
+      reload();
+    } catch (err) { show(err.message, "error"); }
+    setBusy(null);
+  }
+
+  async function confirmCheckin(qrToken, guestName, roomNum) {
+    try {
+      await api.request(`/api/guest/${qrToken}/checkin`, { method: "POST" });
+      show(`${guestName} checked in to Room ${roomNum} ✓`, "success");
+      reload();
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  function AlertCard({ a, resolved }) {
+    const icon = ALERT_ICONS[a.type] || "🔔";
+    return (
+      <div className={`alert-card ${a.type}`}>
+        <div className="alert-card-top">
+          <span className="alert-icon">{icon}</span>
+          <div className="alert-card-body">
+            <strong>{a.title}</strong>
+            {a.message && <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>{a.message}</p>}
+          </div>
+          <span className="alert-time">{timeAgo(a.created_at)}</span>
+        </div>
+        <div className="alert-card-actions">
+          {!resolved && a.type === "arrival" && a.qr_token && (
+            <button className="arrival-confirm-btn" style={{ flex: "unset", fontSize: 12, padding: "6px 12px" }}
+              onClick={() => confirmCheckin(a.qr_token, a.guest_name, a.message?.match(/Room (\w+)/)?.[1] || "")}>
+              <Check size={13} />Confirm Check-In
+            </button>
+          )}
+          {!resolved ? (
+            <button className="alert-resolve-btn" disabled={busy === a.id} onClick={() => resolve(a.id)}>
+              {busy === a.id ? "…" : "Resolve"}
+            </button>
+          ) : (
+            <button className="alert-unresolve-btn" disabled={busy === a.id} onClick={() => unresolve(a.id)}>
+              {busy === a.id ? "…" : "Re-open"}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const { unresolved, resolved } = data.alerts;
+
+  return (
+    <div className="stack">
+      <div className="section-header">
+        <h2>Unresolved Alerts {unresolved.length > 0 && <span className="nav-badge" style={{ fontSize: 12 }}>{unresolved.length}</span>}</h2>
+      </div>
+      {unresolved.length === 0
+        ? <p className="muted">No unresolved alerts — all clear!</p>
+        : <div className="alert-list">{unresolved.map(a => <AlertCard key={a.id} a={a} resolved={false} />)}</div>
+      }
+
+      <div className="section-header" style={{ marginTop: 8, cursor: "pointer" }} onClick={() => setResolvedOpen(o => !o)}>
+        <h2 style={{ color: "var(--muted)", fontSize: 14 }}>
+          Resolved ({resolved.length}) {resolvedOpen ? "▲" : "▼"}
+        </h2>
+      </div>
+      {resolvedOpen && (
+        resolved.length === 0
+          ? <p className="muted">No resolved alerts yet</p>
+          : <div className="alert-list">{resolved.map(a => <AlertCard key={a.id} a={a} resolved />)}</div>
+      )}
     </div>
   );
 }
@@ -2158,6 +2290,14 @@ function GuestApp({ token }) {
   }
 
   useEffect(() => { reload(); }, [token]);
+
+  // 30-second safety-net refresh — silent, catches missed Socket.IO events
+  useEffect(() => {
+    const id = setInterval(() => {
+      gReq("").then(d => { setPayload(d); }).catch(() => {});
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [token]);
 
   useEffect(() => {
     if (!payload?.booking?.id) return;

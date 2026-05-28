@@ -4,6 +4,7 @@ import { query } from "../db/pool.js";
 import { getQrPayload, rotateCheckinQr } from "../services/qr.js";
 import { emitHotel, emitBooking } from "../services/realtime.js";
 import { sendCheckoutReceipt } from "../services/email.js";
+import { createAlert } from "../services/alerts.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
 
 export const guestRouter = Router();
@@ -131,8 +132,15 @@ guestRouter.post("/:token/checkin", requireValidQr, asyncHandler(async (req, res
   )).rows[0];
   emitHotel(req.qr.hotel_id, "notifications:new", notif);
   emitHotel(req.qr.hotel_id, "bookings:changed", { id: req.qr.booking_id, status: "current" });
-  // Push directly to guest app so their waiting screen updates immediately
   emitBooking(req.qr.booking_id, "checkin:confirmed", { roomNumber: req.qr.room_number });
+  createAlert({
+    hotelId:   req.qr.hotel_id,
+    type:      "checkin",
+    title:     `${req.qr.guest_name} checked in`,
+    message:   `Room ${req.qr.room_number}`,
+    bookingId: req.qr.booking_id,
+    guestName: req.qr.guest_name,
+  }).catch(() => {});
   res.json({ ok: true });
 }));
 
@@ -164,6 +172,15 @@ guestRouter.post("/:token/scan-reception", requireValidQr, asyncHandler(async (r
     packageType: req.qr.package_type,
   });
 
+  createAlert({
+    hotelId:   req.qr.hotel_id,
+    type:      "arrival",
+    title:     `${req.qr.guest_name} arrived at reception`,
+    message:   `Room ${req.qr.room_number} · awaiting check-in confirmation`,
+    bookingId: req.qr.booking_id,
+    guestName: req.qr.guest_name,
+  }).catch(() => {});
+
   res.json({ ok: true });
 }));
 
@@ -188,7 +205,14 @@ guestRouter.post("/:token/checkout", requireValidQr, asyncHandler(async (req, re
   const guest = (await query("SELECT * FROM guests WHERE id = $1", [req.qr.guest_id])).rows[0];
   const booking = (await query("SELECT * FROM bookings WHERE id = $1", [req.qr.booking_id])).rows[0];
   await sendCheckoutReceipt({ guest, hotel, booking: { ...booking, room_number: req.qr.room_number } });
-
+  createAlert({
+    hotelId:   req.qr.hotel_id,
+    type:      "checkout",
+    title:     `${req.qr.guest_name} checked out`,
+    message:   `Room ${req.qr.room_number} — now cleaning`,
+    bookingId: req.qr.booking_id,
+    guestName: req.qr.guest_name,
+  }).catch(() => {});
   res.json({ ok: true });
 }));
 
@@ -211,6 +235,14 @@ guestRouter.post("/:token/checkout-scan", requireValidQr, asyncHandler(async (re
   const guest = (await query("SELECT * FROM guests WHERE id = $1", [req.qr.guest_id])).rows[0];
   const booking = (await query("SELECT * FROM bookings WHERE id = $1", [req.qr.booking_id])).rows[0];
   await sendCheckoutReceipt({ guest, hotel, booking: { ...booking, room_number: req.qr.room_number } });
+  createAlert({
+    hotelId:   req.qr.hotel_id,
+    type:      "checkout",
+    title:     `${req.qr.guest_name} checked out`,
+    message:   `Room ${req.qr.room_number} — now cleaning`,
+    bookingId: req.qr.booking_id,
+    guestName: req.qr.guest_name,
+  }).catch(() => {});
   res.json({ ok: true });
 }));
 
@@ -255,6 +287,14 @@ guestRouter.post("/:token/facility-scan", requireValidQr, asyncHandler(async (re
     )).rows[0];
     emitHotel(req.qr.hotel_id, "notifications:new", notif);
     emitHotel(req.qr.hotel_id, "access:denied", { ...notif, facilityName: facility?.name });
+    createAlert({
+      hotelId:   req.qr.hotel_id,
+      type:      "access_denied",
+      title:     `Access denied — ${req.qr.guest_name}`,
+      message:   `Attempted ${facility?.name || "facility"} — not in package`,
+      bookingId: req.qr.booking_id,
+      guestName: req.qr.guest_name,
+    }).catch(() => {});
   }
 
   res.json({ result, facilityName: facility?.name });
@@ -297,6 +337,14 @@ guestRouter.post("/:token/service-requests", requireValidQr, asyncHandler(async 
 
   emitHotel(req.qr.hotel_id, "notifications:new", notif);
   emitHotel(req.qr.hotel_id, "service-requests:new", sr);
+  createAlert({
+    hotelId:   req.qr.hotel_id,
+    type:      "service_request",
+    title:     `${body.type.replace(/_/g, " ")} — Room ${req.qr.room_number}`,
+    message:   body.note || `${req.qr.guest_name} · Room ${req.qr.room_number}`,
+    bookingId: req.qr.booking_id,
+    guestName: req.qr.guest_name,
+  }).catch(() => {});
   res.status(201).json(sr);
 }));
 

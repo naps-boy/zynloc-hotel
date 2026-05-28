@@ -24,6 +24,7 @@ import { navigationRouter }      from "./routes/navigation.js";
 import { serviceRequestsRouter } from "./routes/service-requests.js";
 import { accessLogRouter }       from "./routes/access-log.js";
 import { smtpRouter }            from "./routes/smtp.js";
+import { alertsRouter }          from "./routes/alerts.js";
 import { attachRealtime }        from "./services/realtime.js";
 import { startLateCheckoutMonitor } from "./jobs/lateCheckout.js";
 import { runMigrations }         from "./db/runMigrations.js";
@@ -65,6 +66,7 @@ app.use("/api/navigation",       navigationRouter);
 app.use("/api/service-requests", serviceRequestsRouter);
 app.use("/api/access-log",       accessLogRouter);
 app.use("/api/smtp",             smtpRouter);
+app.use("/api/alerts",           alertsRouter);
 
 app.use((error, _req, res, _next) => {
   const status  = error.status || 500;

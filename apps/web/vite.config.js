@@ -5,5 +5,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173
-  }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react":  ["react", "react-dom"],
+          "vendor-charts": ["recharts"],
+          "vendor-socket": ["socket.io-client"],
+        },
+      },
+    },
+  },
 });
