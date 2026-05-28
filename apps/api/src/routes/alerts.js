@@ -15,7 +15,6 @@ alertsRouter.get("/", asyncHandler(async (req, res) => {
        FROM alerts a
        LEFT JOIN qr_codes qc
               ON qc.booking_id = a.booking_id
-             AND qc.revoked = FALSE
              AND qc.expires_at > NOW()
       WHERE a.hotel_id = $1
       ORDER BY a.created_at DESC
