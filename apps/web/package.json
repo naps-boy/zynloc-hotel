@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.0",
-    "jsqr": "^1.4.0",
     "lucide-react": "^0.468.0",
     "qr-scanner": "^1.4.2",
     "react": "^19.2.0",

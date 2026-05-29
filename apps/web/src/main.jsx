@@ -326,6 +326,8 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 function QrScanner({ onScan, onClose, bookings = [] }) {
   const videoRef    = useRef(null);
   const scannerRef  = useRef(null);
+  const stoppedRef  = useRef(false);  // shared ref so async callbacks see latest value
+  const libRef      = useRef(null);   // stores QrScannerLib after first import (for error-state fallback)
   // All state hoisted above conditionals — React Rules of Hooks
   const [error,  setError]  = useState(null);
   const [search, setSearch] = useState("");
@@ -336,70 +338,107 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
     if (!isMobile) return;
     if (!videoRef.current) return;
 
-    let stopped = false;
+    stoppedRef.current = false;
 
-    async function startScanner() {
+    const startScanner = async () => {
       try {
         const { default: QrScannerLib } = await import("qr-scanner");
-        if (stopped) return;
+        libRef.current = QrScannerLib;
+        if (stoppedRef.current) return;
 
-        // listCameras(true) requests permission AND returns labelled devices —
-        // required on Samsung Chrome before any camera ID is usable.
-        let preferredCamera = "environment"; // safe fallback for iPhone
-        try {
-          const cameras = await QrScannerLib.listCameras(true);
-          if (cameras.length > 0) {
-            // Score each camera: prefer rear, avoid front/ultrawide
-            function score(label) {
-              const l = (label || "").toLowerCase();
-              if (l.includes("front") || l.includes("selfie") || l.includes("user")) return -20;
-              if (l.includes("back") || l.includes("rear") || l.includes("environment")) return 10;
-              if (l.includes("camera2") && l.includes("0")) return 8;
-              if (l.includes("ultrawide") || l.includes("wide")) return -5;
-              return 5;
-            }
-            cameras.sort((a, b) => score(b.label) - score(a.label));
-            preferredCamera = cameras[0].id; // explicit deviceId beats facing-mode string
-          }
-        } catch { /* listCameras failed — keep 'environment' fallback */ }
+        // Step 1 — Raw getUserMedia first — Samsung Chrome requires this before
+        // ANY camera enumeration or QrScannerLib initialization works.
+        const tempStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }
+        });
+        tempStream.getTracks().forEach(t => t.stop()); // stop immediately — permission only
+        if (stoppedRef.current) return;
 
-        if (stopped) return;
+        // Step 2 — Enumerate cameras now that labels are populated
+        const cameras = await QrScannerLib.listCameras(false);
 
+        // Step 3 — Score cameras to find best rear camera
+        let bestCamera = null;
+        if (cameras.length > 0) {
+          const scored = cameras.map(cam => {
+            const l = (cam.label || "").toLowerCase();
+            let score = 0;
+            if (l.includes("back") || l.includes("rear") || l.includes("environment")) score += 10;
+            if (l.includes("0") && l.includes("camera2")) score += 8;
+            if (l.includes("ultrawide") || l.includes("wide")) score -= 5;
+            if (l.includes("front") || l.includes("user") || l.includes("selfie")) score -= 20;
+            return { cam, score };
+          });
+          scored.sort((a, b) => b.score - a.score);
+          bestCamera = scored[0].cam;
+        }
+        if (stoppedRef.current) return;
+
+        // Step 4 — Create scanner with best camera or fallback
         const scanner = new QrScannerLib(
           videoRef.current,
           (result) => {
-            if (!stopped) {
-              stopped = true;
+            if (!stoppedRef.current) {
+              stoppedRef.current = true;
               scanner.stop();
               scanner.destroy();
               onScan(result.data);
             }
           },
           {
-            preferredCamera,
+            preferredCamera: bestCamera ? bestCamera.id : "environment",
             highlightScanRegion: true,
             highlightCodeOutline: true,
             returnDetailedScanResult: true,
+            maxScansPerSecond: 5,
           }
         );
 
         scannerRef.current = scanner;
         await scanner.start();
+
       } catch (err) {
-        if (!stopped) setError("Camera could not start: " + (err?.message || String(err)));
+        if (stoppedRef.current) return;
+        if (err.name === "NotAllowedError") {
+          setError("Camera permission denied. Tap the lock icon in your browser address bar, allow camera access, then try again.");
+        } else if (err.name === "NotFoundError" || err.message?.includes("camera not found") || err.message?.includes("No camera")) {
+          // Last resort — try with no camera preference
+          try {
+            const QrScannerLib = libRef.current;
+            const scanner = new QrScannerLib(
+              videoRef.current,
+              (result) => {
+                if (!stoppedRef.current) {
+                  stoppedRef.current = true;
+                  scanner.stop();
+                  scanner.destroy();
+                  onScan(result.data);
+                }
+              },
+              { returnDetailedScanResult: true, maxScansPerSecond: 5 }
+            );
+            scannerRef.current = scanner;
+            await scanner.start();
+          } catch (err2) {
+            setError("Could not access camera: " + (err2.message || String(err2)));
+          }
+        } else {
+          setError("Camera error: " + (err.message || String(err)));
+        }
       }
-    }
+    };
 
     startScanner();
 
     return () => {
-      stopped = true;
+      stoppedRef.current = true;
       try { scannerRef.current?.stop(); scannerRef.current?.destroy(); } catch {}
       scannerRef.current = null;
     };
   }, []); // empty deps — runs once on mount, cleaned up on unmount
 
   function handleClose() {
+    stoppedRef.current = true;
     try { scannerRef.current?.stop(); scannerRef.current?.destroy(); } catch {}
     scannerRef.current = null;
     onClose();
@@ -443,13 +482,32 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
     );
   }
 
-  // ── Mobile: error state ──────────────────────────────────────────────────
+  // ── Mobile: error state — camera failed, offer photo fallback ───────────
   if (error) {
     return (
       <div className="qr-scanner-shell">
         <div className="qr-file-ui">
           <p className="qr-error">{error}</p>
           <p className="qr-hint">Allow camera access when prompted and try again</p>
+          <label className="qr-capture-label primary" style={{ marginTop: 12, cursor: "pointer" }}>
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              style={{ display: "none" }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file || !libRef.current) return;
+                try {
+                  const result = await libRef.current.scanImage(file, { returnDetailedScanResult: true });
+                  onScan(result.data);
+                } catch {
+                  setError("QR code not detected. Make sure QR fills the frame and is well lit.");
+                }
+              }}
+            />
+            📷 Take Photo Instead
+          </label>
           <button className="secondary" onClick={handleClose}>Cancel</button>
         </div>
       </div>
