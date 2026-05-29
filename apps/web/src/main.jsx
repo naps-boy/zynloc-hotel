@@ -8,7 +8,7 @@ import {
 import {
   AlertTriangle, BarChart3, BedDouble, Bell, CalendarDays, Camera,
   Check, CheckCircle, ChevronRight, DoorOpen, Dumbbell, FileDown,
-  Globe, Hotel, LogOut, Map, MessageSquare, Monitor, Navigation, PhoneCall,
+  Globe, Hotel, LogOut, MessageSquare, Monitor, Navigation, PhoneCall,
   Plus, QrCode, Send, Settings, ShieldCheck, Sparkles, Star, Truck,
   Upload, Users, X, XCircle, Zap, ZoomIn
 } from "lucide-react";
