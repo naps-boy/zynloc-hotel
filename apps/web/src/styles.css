@@ -294,4 +294,10 @@ button.ghost.danger{color:var(--red);border-color:var(--red)}.ghost.danger:hover
 /* ── Broadcast message label ────────────────────────────────────────── */
 .broadcast-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--red);background:rgba(239,95,95,.15);border:1px solid rgba(239,95,95,.3);border-radius:4px;padding:2px 6px;align-self:flex-start;margin-bottom:2px}
 .guest-chat-bubble.broadcast{border:1px solid rgba(239,95,95,.4);background:rgba(239,95,95,.12)!important;color:var(--text)!important}
+/* ── Live video QR scanner (nimiq qr-scanner) ───────────────────────── */
+.qr-scanner-shell{position:fixed;inset:0;z-index:2000;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.qr-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.qr-hint-overlay{position:absolute;bottom:100px;left:0;right:0;text-align:center;z-index:2001;pointer-events:none}
+.qr-hint{color:#fff;font-size:15px;background:rgba(0,0,0,.6);padding:8px 16px;border-radius:20px;display:inline-block}
+.close-camera{position:absolute;bottom:40px;z-index:2002;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:var(--radius);padding:10px 24px;font-size:14px;cursor:pointer}
 @media(max-width:600px){.chat-sidebar{width:200px}.chat-shell{font-size:13px}.guest-chat-shell{height:calc(100vh - 140px)}}

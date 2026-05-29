@@ -318,43 +318,72 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 }
 
 // ── QrScanner ─────────────────────────────────────────────────────────────────
-// MOBILE (Android/iPhone): file-input capture — zero permission prompts,
-//   works on every phone. Uses jsqr (dynamic import) to decode the image.
+// MOBILE (Android/iPhone/Samsung): nimiq/qr-scanner — live continuous video,
+//   no photo needed, works on Samsung AND iPhone Safari.
 // DESKTOP: guest search box — no camera needed.
-
-async function decodeQRFromFile(file) {
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result);
-    reader.onerror = () => reject(new Error("File read failed"));
-    reader.readAsDataURL(file);
-  });
-
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = async () => {
-      const canvas = document.createElement("canvas");
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext("2d").drawImage(img, 0, 0);
-      const imageData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-      const { default: jsQR } = await import("jsqr");
-      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" })
-                || jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "onlyInvert" });
-      code ? resolve(code.data) : reject(new Error("No QR code detected"));
-    };
-    img.onerror = () => reject(new Error("Image failed to load"));
-    img.src = dataUrl;
-  });
-}
+// Worker file: public/qr-scanner-worker.min.js (copied from node_modules).
 
 function QrScanner({ onScan, onClose, bookings = [] }) {
-  const [status, setStatus] = useState("idle"); // idle | scanning | success | error
+  const videoRef    = useRef(null);
+  const scannerRef  = useRef(null);
+  // All state hoisted above conditionals — React Rules of Hooks
   const [error,  setError]  = useState(null);
   const [search, setSearch] = useState("");
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-  // ── Desktop mode: guest search ───────────────────────────────────────────
+  // ── Mobile: start live scanner on mount ─────────────────────────────────
+  useEffect(() => {
+    if (!isMobile) return;
+    if (!videoRef.current) return;
+
+    let stopped = false;
+
+    async function startScanner() {
+      try {
+        const { default: QrScannerLib } = await import("qr-scanner");
+        if (stopped) return;
+
+        const scanner = new QrScannerLib(
+          videoRef.current,
+          (result) => {
+            if (!stopped) {
+              stopped = true;
+              scanner.stop();
+              scanner.destroy();
+              onScan(result.data);
+            }
+          },
+          {
+            preferredCamera: "environment",
+            highlightScanRegion: true,
+            highlightCodeOutline: true,
+            returnDetailedScanResult: true,
+          }
+        );
+
+        scannerRef.current = scanner;
+        await scanner.start();
+      } catch (err) {
+        if (!stopped) setError("Camera could not start: " + (err?.message || String(err)));
+      }
+    }
+
+    startScanner();
+
+    return () => {
+      stopped = true;
+      try { scannerRef.current?.stop(); scannerRef.current?.destroy(); } catch {}
+      scannerRef.current = null;
+    };
+  }, []); // empty deps — runs once on mount, cleaned up on unmount
+
+  function handleClose() {
+    try { scannerRef.current?.stop(); scannerRef.current?.destroy(); } catch {}
+    scannerRef.current = null;
+    onClose();
+  }
+
+  // ── Desktop: guest search ────────────────────────────────────────────────
   if (!isMobile) {
     const filtered = bookings.filter(b =>
       ((b.guest_name  || "").toLowerCase().includes(search.toLowerCase()) ||
@@ -392,40 +421,27 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
     );
   }
 
-  // ── Mobile mode: file-input capture ─────────────────────────────────────
-  async function handleFileChange(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setStatus("scanning");
-    setError(null);
-    try {
-      const result = await decodeQRFromFile(file);
-      setStatus("success");
-      onScan(result);
-    } catch {
-      setStatus("error");
-      setError("QR code not detected. Make sure the QR code fills most of the photo and is well lit. Try again.");
-    }
+  // ── Mobile: error state ──────────────────────────────────────────────────
+  if (error) {
+    return (
+      <div className="qr-scanner-shell">
+        <div className="qr-file-ui">
+          <p className="qr-error">{error}</p>
+          <p className="qr-hint">Allow camera access when prompted and try again</p>
+          <button className="secondary" onClick={handleClose}>Cancel</button>
+        </div>
+      </div>
+    );
   }
 
+  // ── Mobile: live video view ──────────────────────────────────────────────
   return (
     <div className="qr-scanner-shell">
-      <div className="qr-file-ui">
-        {status === "scanning" && <p className="qr-loading">Reading QR code…</p>}
-        {error && <p className="qr-error">{error}</p>}
-        <label className="qr-capture-label primary">
-          <Camera size={20} /><span>Take Photo of QR Code</span>
-          <input type="file" accept="image/*" capture="environment"
-            onChange={handleFileChange} style={{ display: "none" }} />
-        </label>
-        <label className="qr-capture-label secondary">
-          <Upload size={18} /><span>Upload from Gallery</span>
-          <input type="file" accept="image/*"
-            onChange={handleFileChange} style={{ display: "none" }} />
-        </label>
-        <p className="qr-hint">Point camera at the QR code and take a clear photo</p>
-        <button className="secondary" onClick={onClose}>Cancel</button>
+      <video ref={videoRef} className="qr-video" />
+      <div className="qr-hint-overlay">
+        <p className="qr-hint">Point camera at QR code — scans automatically</p>
       </div>
+      <button className="secondary close-camera" onClick={handleClose}>Cancel</button>
     </div>
   );
 }

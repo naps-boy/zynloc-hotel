@@ -13,6 +13,7 @@ export default defineConfig({
           "vendor-react":  ["react", "react-dom"],
           "vendor-charts": ["recharts"],
           "vendor-socket": ["socket.io-client"],
+          "vendor-qr":     ["qr-scanner"],
         },
       },
     },
