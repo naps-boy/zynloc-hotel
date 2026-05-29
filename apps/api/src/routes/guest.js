@@ -57,12 +57,19 @@ guestRouter.get("/:token", requireValidQr, asyncHandler(async (req, res) => {
     [req.qr.hotel_id, req.qr.guest_id]
   );
 
+  // Floor plan (if hotel has one set up)
+  const floorPlanResult = await query(
+    "SELECT * FROM floor_plans WHERE hotel_id = $1 LIMIT 1",
+    [req.qr.hotel_id]
+  );
+
   res.json({
     booking: req.qr,
     facilities: access.rows,
     waypoints: waypoints.rows,
     connections: connections.rows,
-    messages: messages.rows
+    messages: messages.rows,
+    floorPlan: floorPlanResult.rows[0] || null,
   });
 }));
 

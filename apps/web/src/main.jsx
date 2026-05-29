@@ -2274,14 +2274,263 @@ function MgrAnalytics({ api, data }) {
   );
 }
 
+// ── NavEditor ─────────────────────────────────────────────────────────────────
+// Full visual floor plan editor for the manager.
+// Click on the floor plan image to place waypoints, then connect them.
+
+function NavEditor({ api, show }) {
+  const [floorPlan,   setFloorPlan]   = useState(null);
+  const [waypoints,   setWaypoints]   = useState([]);
+  const [connections, setConnections] = useState([]);
+  const [pending,     setPending]     = useState(null);  // { x, y } % after click
+  const [newWpName,   setNewWpName]   = useState("");
+  const [newWpPhoto,  setNewWpPhoto]  = useState(null);
+  const [connFrom,    setConnFrom]    = useState("");
+  const [connTo,      setConnTo]      = useState("");
+  const [loadErr,     setLoadErr]     = useState(null);
+
+  useEffect(() => {
+    api.request("/api/navigation/floor-plan").then(setFloorPlan).catch(() => {});
+    api.request("/api/navigation/waypoints").then(setWaypoints).catch(() => {});
+    api.request("/api/navigation/connections").then(setConnections).catch(() => {});
+  }, []);
+
+  async function saveFloorPlan(imageData) {
+    try {
+      const fp = await api.request("/api/navigation/floor-plan", {
+        method: "POST", body: JSON.stringify({ imageData })
+      });
+      setFloorPlan(fp);
+      show("Floor plan saved", "success");
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  function handlePlanClick(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10;
+    const y = Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10;
+    setPending({ x, y });
+    setNewWpName("");
+    setNewWpPhoto(null);
+  }
+
+  async function saveWaypoint(e) {
+    e.preventDefault();
+    if (!pending || !newWpName.trim()) return;
+    try {
+      const wp = await api.request("/api/navigation/waypoints", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newWpName.trim(),
+          xPercent: pending.x,
+          yPercent: pending.y,
+          photoData: newWpPhoto || "",
+        })
+      });
+      setWaypoints(w => [...w, wp]);
+      setPending(null);
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function deleteWaypoint(id) {
+    try {
+      await api.request(`/api/navigation/waypoints/${id}`, { method: "DELETE" });
+      setWaypoints(w => w.filter(x => x.id !== id));
+      setConnections(c => c.filter(x => x.from_waypoint_id !== id && x.to_waypoint_id !== id));
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function addConnection(e) {
+    e.preventDefault();
+    if (!connFrom || !connTo || connFrom === connTo) return;
+    try {
+      await api.request("/api/navigation/connections", {
+        method: "POST",
+        body: JSON.stringify({ fromWaypointId: connFrom, toWaypointId: connTo, bidirectional: true })
+      });
+      // Reload connections to get both directions
+      const fresh = await api.request("/api/navigation/connections");
+      setConnections(fresh);
+      setConnFrom(""); setConnTo("");
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function deleteConnection(id) {
+    try {
+      await api.request(`/api/navigation/connections/${id}`, { method: "DELETE" });
+      setConnections(c => c.filter(x => x.id !== id));
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  // Deduplicate bidirectional connections for display
+  const uniqueConns = connections.filter((c, i, arr) =>
+    arr.findIndex(x =>
+      (x.from_waypoint_id === c.from_waypoint_id && x.to_waypoint_id === c.to_waypoint_id) ||
+      (x.from_waypoint_id === c.to_waypoint_id   && x.to_waypoint_id === c.from_waypoint_id)
+    ) === i
+  );
+
+  return (
+    <div className="stack">
+      <h2>Floor Plan &amp; Navigation</h2>
+      <p className="muted">
+        Upload your floor plan, click to place waypoints, then connect them.
+        Guests can navigate step-by-step with photos at each waypoint.
+      </p>
+
+      {/* ── Floor plan upload ────────────────────────────────────────── */}
+      {!floorPlan ? (
+        <div className="panel stack">
+          <h3>Step 1 — Upload Floor Plan</h3>
+          <ImageUpload value={null} onChange={saveFloorPlan} label="Upload floor plan image" maxWidth={1200} />
+        </div>
+      ) : (
+        <div className="panel stack">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <h3 style={{ margin: 0 }}>
+              Step 2 — Click to Place Waypoints
+              {floorPlan && <span className="muted" style={{ fontSize: 12, marginLeft: 8, fontWeight: 400 }}>
+                click anywhere on the map
+              </span>}
+            </h3>
+            <button className="ghost sm" style={{ fontSize: 12 }}
+              onClick={() => { if (window.confirm("Replace floor plan?")) setFloorPlan(null); }}>
+              Replace image
+            </button>
+          </div>
+
+          {/* Clickable floor plan with SVG overlay */}
+          <div className="nav-plan-container" onClick={handlePlanClick}>
+            <img src={floorPlan.image_data} alt="Floor plan" className="nav-plan-img" draggable={false} />
+            <svg className="nav-plan-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              {/* Connection lines */}
+              {connections.map(c => {
+                const f = waypoints.find(w => w.id === c.from_waypoint_id);
+                const t = waypoints.find(w => w.id === c.to_waypoint_id);
+                if (!f || !t) return null;
+                return (
+                  <line key={c.id}
+                    x1={f.x_percent ?? f.x} y1={f.y_percent ?? f.y}
+                    x2={t.x_percent ?? t.x} y2={t.y_percent ?? t.y}
+                    stroke="#d8a84f" strokeWidth="0.6" strokeDasharray="1.5 1" opacity="0.8"
+                  />
+                );
+              })}
+              {/* Waypoint dots */}
+              {waypoints.map(wp => (
+                <g key={wp.id}>
+                  <circle cx={wp.x_percent ?? wp.x} cy={wp.y_percent ?? wp.y}
+                    r="1.8" fill="#d8a84f" stroke="white" strokeWidth="0.5" />
+                </g>
+              ))}
+              {/* Pending dot (green, where user just clicked) */}
+              {pending && (
+                <circle cx={pending.x} cy={pending.y}
+                  r="2.2" fill="#26c281" stroke="white" strokeWidth="0.5" opacity="0.9" />
+              )}
+            </svg>
+            {/* Waypoint labels (HTML overlay, easier to position) */}
+            {waypoints.map(wp => (
+              <div key={`lbl-${wp.id}`} className="nav-wp-label"
+                style={{ left: `${wp.x_percent ?? wp.x}%`, top: `${wp.y_percent ?? wp.y}%` }}>
+                {wp.name}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── New waypoint form ─────────────────────────────────────────── */}
+      {pending && (
+        <div className="panel stack" style={{ borderColor: "var(--green)" }}>
+          <h3 style={{ margin: 0 }}>New Waypoint at {pending.x}%, {pending.y}%</h3>
+          <form className="stack" onSubmit={saveWaypoint}>
+            <input required autoFocus placeholder="Name — e.g. Entrance, Pool, Room 101 Door"
+              value={newWpName} onChange={e => setNewWpName(e.target.value)} />
+            <label className="upload-field-label">Photo (what guests see here) — optional</label>
+            <ImageUpload value={newWpPhoto} onChange={setNewWpPhoto} label="Upload waypoint photo" maxWidth={800} />
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="primary" type="submit"><Check size={16} />Save Waypoint</button>
+              <button className="ghost" type="button" onClick={() => setPending(null)}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ── Waypoints list ───────────────────────────────────────────── */}
+      {waypoints.length > 0 && (
+        <div className="panel stack">
+          <h3 style={{ margin: 0, marginBottom: 8 }}>Waypoints ({waypoints.length})</h3>
+          <div className="table">
+            {waypoints.map(wp => (
+              <div className="row" key={wp.id} style={{ gap: 10 }}>
+                {(wp.photo_data || wp.photo_url) && (
+                  <img src={wp.photo_data || wp.photo_url} alt={wp.name}
+                    style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
+                )}
+                <span style={{ flex: 1 }}>{wp.name}</span>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {(wp.x_percent ?? wp.x).toFixed(0)}%, {(wp.y_percent ?? wp.y).toFixed(0)}%
+                </span>
+                <button className="icon-btn" style={{ color: "var(--red)" }}
+                  onClick={() => deleteWaypoint(wp.id)} title="Delete">
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Connect waypoints ────────────────────────────────────────── */}
+      {waypoints.length >= 2 && (
+        <div className="panel stack">
+          <h3 style={{ margin: 0, marginBottom: 8 }}>Step 3 — Connect Waypoints</h3>
+          <form className="inline-form" onSubmit={addConnection}>
+            <select required value={connFrom} onChange={e => setConnFrom(e.target.value)}>
+              <option value="">From…</option>
+              {waypoints.map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
+            </select>
+            <select required value={connTo} onChange={e => setConnTo(e.target.value)}>
+              <option value="">To…</option>
+              {waypoints.map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
+            </select>
+            <button className="primary" type="submit"><Plus size={16} />Connect</button>
+          </form>
+          {uniqueConns.length > 0 && (
+            <div className="table">
+              {uniqueConns.map(c => {
+                const f = waypoints.find(w => w.id === c.from_waypoint_id)?.name || "?";
+                const t = waypoints.find(w => w.id === c.to_waypoint_id)?.name || "?";
+                return (
+                  <div className="row" key={c.id}>
+                    <span style={{ flex: 1 }}>{f} ↔ {t}</span>
+                    <button className="icon-btn" style={{ color: "var(--red)" }}
+                      onClick={() => deleteConnection(c.id)} title="Remove">
+                      <X size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {waypoints.length >= 2 && connections.length > 0 && (
+        <div className="notice gold">
+          <CheckCircle size={16} />
+          <p style={{ margin: 0 }}>Navigation ready — guests can now get step-by-step directions in the guest app.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MgrSettings({ api, data, reload, show }) {
   const s = data.settings || {};
   const [form, setForm] = useState({ name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "", coverPhotoUrl: s.cover_photo_url || "", receptionPhone: s.reception_phone || "" });
   const [tab, setTab] = useState("brand");
-  const [waypoints, setWaypoints] = useState([]);
-  const [connections, setConnections] = useState([]);
-  const [wpForm, setWpForm] = useState({ name: "", x: 0, y: 0, floor: 1, photoUrl: "" });
-  const [connForm, setConnForm] = useState({ fromWaypointId: "", toWaypointId: "", distance: 1 });
   const [checkoutQr, setCheckoutQr] = useState(s.checkout_qr || null);
   const [receptionQr, setReceptionQr] = useState(null);
   const [receptionExpiry, setReceptionExpiry] = useState(null);
@@ -2295,11 +2544,6 @@ function MgrSettings({ api, data, reload, show }) {
   const [smtpTesting, setSmtpTesting] = useState(null);
 
   useEffect(() => { setForm({ name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "", coverPhotoUrl: s.cover_photo_url || "", receptionPhone: s.reception_phone || "" }); setCheckoutQr(s.checkout_qr || null); }, [data.settings]);
-
-  useEffect(() => {
-    api.request("/api/navigation/waypoints").then(setWaypoints).catch(() => {});
-    api.request("/api/navigation/connections").then(setConnections).catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (tab === "email") api.request("/api/smtp").then(setSmtpConfigs).catch(() => {});
@@ -2353,22 +2597,6 @@ function MgrSettings({ api, data, reload, show }) {
     e.preventDefault();
     try { await api.request("/api/settings", { method: "PUT", body: JSON.stringify(form) }); reload(); show("Saved", "success"); }
     catch (err) { show(err.message, "error"); }
-  }
-
-  async function addWp(e) {
-    e.preventDefault();
-    try {
-      const wp = await api.request("/api/navigation/waypoints", { method: "POST", body: JSON.stringify(wpForm) });
-      setWaypoints(w => [...w, wp]); setWpForm(f => ({ ...f, name: "", photoUrl: "" }));
-    } catch (err) { show(err.message, "error"); }
-  }
-
-  async function addConn(e) {
-    e.preventDefault();
-    try {
-      const conn = await api.request("/api/navigation/connections", { method: "POST", body: JSON.stringify(connForm) });
-      setConnections(c => [...c, conn]);
-    } catch (err) { show(err.message, "error"); }
   }
 
   async function regenQr() {
@@ -2528,42 +2756,7 @@ function MgrSettings({ api, data, reload, show }) {
       )}
 
       {tab === "navigation" && (
-        <div className="stack">
-          <h2>Indoor navigation</h2>
-          <p className="muted">Add waypoints and connections to enable step-by-step guest navigation.</p>
-          <form className="inline-form" onSubmit={addWp}>
-            <input required placeholder="Waypoint name" value={wpForm.name} onChange={e => setWpForm({ ...wpForm, name: e.target.value })} />
-            <input type="number" placeholder="X" style={{ width: 60 }} value={wpForm.x} onChange={e => setWpForm({ ...wpForm, x: +e.target.value })} />
-            <input type="number" placeholder="Y" style={{ width: 60 }} value={wpForm.y} onChange={e => setWpForm({ ...wpForm, y: +e.target.value })} />
-            <input type="number" placeholder="Floor" style={{ width: 70 }} value={wpForm.floor} onChange={e => setWpForm({ ...wpForm, floor: +e.target.value })} />
-            <input placeholder="Photo URL" value={wpForm.photoUrl} onChange={e => setWpForm({ ...wpForm, photoUrl: e.target.value })} />
-            <button className="primary" type="submit"><Plus size={18} />Add</button>
-          </form>
-          <div className="table">
-            {waypoints.map(wp => <div className="row" key={wp.id}><span>{wp.name}</span><span>Floor {wp.floor}</span><span>({wp.x},{wp.y})</span></div>)}
-          </div>
-          {waypoints.length >= 2 && (
-            <form className="inline-form" onSubmit={addConn}>
-              <select value={connForm.fromWaypointId} onChange={e => setConnForm({ ...connForm, fromWaypointId: e.target.value })}>
-                <option value="">From…</option>
-                {waypoints.map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
-              </select>
-              <select value={connForm.toWaypointId} onChange={e => setConnForm({ ...connForm, toWaypointId: e.target.value })}>
-                <option value="">To…</option>
-                {waypoints.map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
-              </select>
-              <input type="number" placeholder="m" style={{ width: 70 }} value={connForm.distance} onChange={e => setConnForm({ ...connForm, distance: +e.target.value })} />
-              <button className="primary" type="submit"><Plus size={18} />Connect</button>
-            </form>
-          )}
-          <div className="table">
-            {connections.map(c => {
-              const from = waypoints.find(w => w.id === c.from_waypoint_id)?.name;
-              const to = waypoints.find(w => w.id === c.to_waypoint_id)?.name;
-              return <div className="row" key={c.id}><span>{from}</span><ChevronRight size={13} /><span>{to}</span><span>{c.distance}m</span></div>;
-            })}
-          </div>
-        </div>
+        <NavEditor api={api} show={show} />
       )}
 
       {tab === "qr" && (
@@ -2744,7 +2937,7 @@ function GuestApp({ token }) {
     );
   }
 
-  const { booking, facilities = [], waypoints = [], connections = [], messages = [] } = payload;
+  const { booking, facilities = [], waypoints = [], connections = [], messages = [], floorPlan = null } = payload;
 
   if (!booking.profile_status || booking.profile_status === "pending") {
     return <ProfileSetup token={token} booking={booking} onComplete={reload} lang={lang} show={show} toast={toast} />;
@@ -2775,7 +2968,7 @@ function GuestApp({ token }) {
       <div className="guest-body">
         {tab === "home" && <GuestHome booking={booking} gReq={gReq} show={show} lang={lang} setLang={setLang} />}
         {tab === "facilities" && <GuestFacilities facilities={facilities} gReq={gReq} show={show} lang={lang} />}
-        {tab === "navigate" && <GuestNavigate waypoints={waypoints} connections={connections} lang={lang} show={show} />}
+        {tab === "navigate" && <GuestNavigate waypoints={waypoints} connections={connections} floorPlan={floorPlan} lang={lang} show={show} />}
         {tab === "services" && <GuestServices gReq={gReq} show={show} lang={lang} />}
         {tab === "messages" && <GuestMessages messages={messages} gReq={gReq} reload={reload} show={show} lang={lang} booking={booking} />}
         {tab === "checkout" && <GuestCheckout booking={booking} gReq={gReq} show={show} lang={lang} />}
@@ -2980,10 +3173,10 @@ function GuestFacilities({ facilities, gReq, show, lang }) {
   );
 }
 
-function GuestNavigate({ waypoints, connections, lang, show }) {
-  const [dest, setDest] = useState("");
+function GuestNavigate({ waypoints, connections, floorPlan, lang, show }) {
+  const [dest,  setDest]  = useState("");
   const [route, setRoute] = useState(null);
-  const [step, setStep] = useState(0);
+  const [step,  setStep]  = useState(0);
 
   function navigate() {
     if (!dest || !waypoints.length) { show(t(lang, "noNavigation"), "error"); return; }
@@ -2993,36 +3186,117 @@ function GuestNavigate({ waypoints, connections, lang, show }) {
     setRoute(result); setStep(0);
   }
 
-  if (!waypoints.length) return <div className="guest-navigate"><p className="muted">{t(lang, "noNavigation")}</p></div>;
+  if (!waypoints.length) return (
+    <div className="guest-navigate">
+      <p className="muted" style={{ padding: "20px 0" }}>{t(lang, "noNavigation")}</p>
+    </div>
+  );
+
+  const routeSet = route ? new Set(route.path) : new Set();
+  const currentWpId = route?.path[step + 1] ?? null; // +1 because path[0] is start
 
   return (
     <div className="guest-navigate">
-      <h2>{t(lang, "navigate")}</h2>
+      <h2 style={{ marginBottom: 12 }}>{t(lang, "navigate")}</h2>
+
+      {/* ── Destination picker ────────────────────────────────────── */}
       <div className="nav-picker">
-        <select value={dest} onChange={e => setDest(e.target.value)}>
+        <select value={dest} onChange={e => { setDest(e.target.value); setRoute(null); }}>
           <option value="">{t(lang, "selectDestination")}</option>
           {waypoints.map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
         </select>
-        <button className="primary" onClick={navigate} disabled={!dest}><Navigation size={18} />Go</button>
+        <button className="primary" onClick={navigate} disabled={!dest}>
+          <Navigation size={18} />Go
+        </button>
       </div>
 
+      {/* ── Floor plan with route overlay ─────────────────────────── */}
+      {floorPlan && (
+        <div className="nav-plan-guest">
+          <img src={floorPlan.image_data} alt="Floor plan" className="nav-plan-img" draggable={false} />
+          <svg className="nav-plan-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {/* All connections (dim) */}
+            {connections.map(c => {
+              const f = waypoints.find(w => w.id === c.from_waypoint_id);
+              const t2 = waypoints.find(w => w.id === c.to_waypoint_id);
+              if (!f || !t2) return null;
+              return (
+                <line key={c.id}
+                  x1={f.x_percent ?? f.x} y1={f.y_percent ?? f.y}
+                  x2={t2.x_percent ?? t2.x} y2={t2.y_percent ?? t2.y}
+                  stroke="rgba(255,255,255,0.2)" strokeWidth="0.5"
+                />
+              );
+            })}
+            {/* Route path (highlighted) */}
+            {route && route.path.slice(0, -1).map((id, i) => {
+              const f = waypoints.find(w => w.id === id);
+              const t2 = waypoints.find(w => w.id === route.path[i + 1]);
+              if (!f || !t2) return null;
+              return (
+                <line key={`route-${i}`}
+                  x1={f.x_percent ?? f.x} y1={f.y_percent ?? f.y}
+                  x2={t2.x_percent ?? t2.x} y2={t2.y_percent ?? t2.y}
+                  stroke="#d8a84f" strokeWidth="1.5" strokeLinecap="round"
+                />
+              );
+            })}
+            {/* All waypoints */}
+            {waypoints.map(wp => {
+              const isRoute   = routeSet.has(wp.id);
+              const isCurrent = wp.id === currentWpId;
+              return (
+                <circle key={wp.id}
+                  cx={wp.x_percent ?? wp.x} cy={wp.y_percent ?? wp.y}
+                  r={isCurrent ? 2.5 : isRoute ? 2 : 1.5}
+                  fill={isCurrent ? "#26c281" : isRoute ? "#d8a84f" : "rgba(255,255,255,0.5)"}
+                  stroke="white" strokeWidth="0.4"
+                />
+              );
+            })}
+          </svg>
+          {/* Waypoint name labels */}
+          {waypoints.filter(wp => routeSet.has(wp.id)).map(wp => (
+            <div key={`glbl-${wp.id}`} className="nav-wp-label"
+              style={{ left: `${wp.x_percent ?? wp.x}%`, top: `${wp.y_percent ?? wp.y}%`,
+                       color: wp.id === currentWpId ? "var(--green)" : "var(--gold)" }}>
+              {wp.name}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Step-by-step directions ───────────────────────────────── */}
       {route && (
         <div className="nav-steps">
           <div className="nav-progress">
-            <div className="progress-fill" style={{ width: `${Math.round((step + 1) / route.steps.length * 100)}%` }} />
+            <div className="nav-progress-fill"
+              style={{ width: `${Math.round((step + 1) / route.steps.length * 100)}%` }} />
           </div>
-          <div className="step-card">
-            {route.steps[step]?.waypoint?.photo_url && (
-              <img src={route.steps[step].waypoint.photo_url} alt="Step" className="step-photo" />
-            )}
-            <div className="step-num">{t(lang, "step")} {step + 1} {t(lang, "of")} {route.steps.length}</div>
-            <h3>{route.steps[step]?.waypoint?.name}</h3>
-            <p>{route.steps[step]?.hint || ""}</p>
+          <div className="nav-step-card">
+            {(() => {
+              const wp = route.steps[step]?.waypoint;
+              const photo = wp?.photo_data || wp?.photo_url;
+              return (
+                <>
+                  {photo && <img src={photo} alt="Location" className="nav-step-photo" />}
+                  <div className="nav-step-counter">
+                    {t(lang, "step")} {step + 1} {t(lang, "of")} {route.steps.length}
+                  </div>
+                  <h3 className="nav-step-hint">{wp?.name}</h3>
+                  <p className="nav-step-name">{route.steps[step]?.hint || "Continue ahead"}</p>
+                </>
+              );
+            })()}
           </div>
           <div className="step-nav">
-            <button className="ghost" onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}>←</button>
+            <button className="ghost" onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}>
+              ← {t(lang, "back") || "Back"}
+            </button>
             {step < route.steps.length - 1
-              ? <button className="primary" onClick={() => setStep(s => s + 1)}>{t(lang, "nextStep")} →</button>
+              ? <button className="primary" onClick={() => setStep(s => s + 1)}>
+                  {t(lang, "nextStep")} →
+                </button>
               : <div className="arrived"><CheckCircle size={18} /> {t(lang, "arrived")}</div>
             }
           </div>
