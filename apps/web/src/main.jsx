@@ -343,6 +343,28 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
         const { default: QrScannerLib } = await import("qr-scanner");
         if (stopped) return;
 
+        // listCameras(true) requests permission AND returns labelled devices —
+        // required on Samsung Chrome before any camera ID is usable.
+        let preferredCamera = "environment"; // safe fallback for iPhone
+        try {
+          const cameras = await QrScannerLib.listCameras(true);
+          if (cameras.length > 0) {
+            // Score each camera: prefer rear, avoid front/ultrawide
+            function score(label) {
+              const l = (label || "").toLowerCase();
+              if (l.includes("front") || l.includes("selfie") || l.includes("user")) return -20;
+              if (l.includes("back") || l.includes("rear") || l.includes("environment")) return 10;
+              if (l.includes("camera2") && l.includes("0")) return 8;
+              if (l.includes("ultrawide") || l.includes("wide")) return -5;
+              return 5;
+            }
+            cameras.sort((a, b) => score(b.label) - score(a.label));
+            preferredCamera = cameras[0].id; // explicit deviceId beats facing-mode string
+          }
+        } catch { /* listCameras failed — keep 'environment' fallback */ }
+
+        if (stopped) return;
+
         const scanner = new QrScannerLib(
           videoRef.current,
           (result) => {
@@ -354,7 +376,7 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
             }
           },
           {
-            preferredCamera: "environment",
+            preferredCamera,
             highlightScanRegion: true,
             highlightCodeOutline: true,
             returnDetailedScanResult: true,
