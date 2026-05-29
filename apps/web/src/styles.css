@@ -301,3 +301,10 @@ button.ghost.danger{color:var(--red);border-color:var(--red)}.ghost.danger:hover
 .qr-hint{color:#fff;font-size:15px;background:rgba(0,0,0,.6);padding:8px 16px;border-radius:20px;display:inline-block}
 .close-camera{position:absolute;bottom:40px;z-index:2002;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:var(--radius);padding:10px 24px;font-size:14px;cursor:pointer}
 @media(max-width:600px){.chat-sidebar{width:200px}.chat-shell{font-size:13px}.guest-chat-shell{height:calc(100vh - 140px)}}
+/* ── Android native camera instruction UI ───────────────────────────── */
+.qr-android-ui{display:flex;flex-direction:column;align-items:center;gap:20px;padding:32px 24px;background:var(--bg2);border:1px solid var(--border);border-radius:20px;max-width:320px;width:100%;text-align:center}
+.qr-android-icon{font-size:64px;line-height:1}
+.qr-android-title{font-size:20px;font-weight:700;color:var(--gold);margin:0}
+.qr-android-instruction{font-size:15px;color:var(--text);line-height:1.5;margin:0}
+.qr-android-steps{display:flex;flex-direction:column;gap:8px;width:100%}
+.qr-step{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;color:var(--text);text-align:left}

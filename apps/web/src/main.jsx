@@ -326,16 +326,18 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 function QrScanner({ onScan, onClose, bookings = [] }) {
   const videoRef    = useRef(null);
   const scannerRef  = useRef(null);
-  const stoppedRef  = useRef(false);  // shared ref so async callbacks see latest value
-  const libRef      = useRef(null);   // stores QrScannerLib after first import (for error-state fallback)
+  const stoppedRef  = useRef(false);
+  const libRef      = useRef(null);
   // All state hoisted above conditionals — React Rules of Hooks
   const [error,  setError]  = useState(null);
   const [search, setSearch] = useState("");
-  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isIphone  = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const isMobile  = isIphone || isAndroid;
 
-  // ── Mobile: start live scanner on mount ─────────────────────────────────
+  // ── iPhone only: start live scanner on mount ────────────────────────────
   useEffect(() => {
-    if (!isMobile) return;
+    if (!isIphone) return;           // Android uses native camera; desktop uses search
     if (!videoRef.current) return;
 
     stoppedRef.current = false;
@@ -482,7 +484,63 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
     );
   }
 
-  // ── Mobile: error state — camera failed, offer photo fallback ───────────
+  // ── Android: native camera instruction ──────────────────────────────────
+  // Android guests use their native Samsung/Google camera app — it scans QR
+  // codes automatically and opens the URL. No in-browser camera needed.
+  if (isAndroid) {
+    // Manager context (bookings available) — show search box instead
+    if (bookings.length > 0) {
+      const filtered = bookings.filter(b =>
+        ((b.guest_name  || "").toLowerCase().includes(search.toLowerCase()) ||
+         (b.guest_email || "").toLowerCase().includes(search.toLowerCase())) &&
+        b.status !== "past" && !b.revoked
+      );
+      return (
+        <div className="qr-scanner-shell">
+          <div className="qr-desktop-search">
+            <h3 style={{ margin: 0, fontSize: 16 }}>Find Guest</h3>
+            <input placeholder="Type guest name or email…" value={search}
+              onChange={e => setSearch(e.target.value)} autoFocus style={{ width: "100%" }} />
+            <div className="qr-guest-results">
+              {filtered.map(b => (
+                <div key={b.id} className="qr-guest-row" onClick={() => onScan(b.qr_token)}>
+                  {b.selfie_url && <img src={b.selfie_url} className="qr-guest-avatar" alt="" />}
+                  <div>
+                    <div className="qr-guest-name">{b.guest_name}</div>
+                    <div className="qr-guest-email">{b.guest_email}</div>
+                  </div>
+                </div>
+              ))}
+              {search && filtered.length === 0 && <p className="qr-no-results">No matching guests found</p>}
+            </div>
+            <button className="secondary" onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      );
+    }
+    // Guest context — show instruction to use native camera
+    return (
+      <div className="qr-scanner-shell">
+        <div className="qr-android-ui">
+          <div className="qr-android-icon">📷</div>
+          <h3 className="qr-android-title">Use Your Camera App</h3>
+          <p className="qr-android-instruction">
+            Open your native camera app and point it at the QR code displayed at the hotel.
+            Your Samsung camera reads it automatically.
+          </p>
+          <div className="qr-android-steps">
+            <div className="qr-step">1. Press your Home button or swipe up</div>
+            <div className="qr-step">2. Open your Camera app</div>
+            <div className="qr-step">3. Point at the QR code</div>
+            <div className="qr-step">4. Tap the link that appears</div>
+          </div>
+          <button className="secondary" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── iPhone: error state — camera failed, offer photo fallback ────────────
   if (error) {
     return (
       <div className="qr-scanner-shell">
@@ -490,11 +548,7 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
           <p className="qr-error">{error}</p>
           <p className="qr-hint">Allow camera access when prompted and try again</p>
           <label className="qr-capture-label primary" style={{ marginTop: 12, cursor: "pointer" }}>
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              style={{ display: "none" }}
+            <input type="file" accept="image/*" capture="environment" style={{ display: "none" }}
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 if (!file || !libRef.current) return;
@@ -504,8 +558,7 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
                 } catch {
                   setError("QR code not detected. Make sure QR fills the frame and is well lit.");
                 }
-              }}
-            />
+              }} />
             📷 Take Photo Instead
           </label>
           <button className="secondary" onClick={handleClose}>Cancel</button>
@@ -514,7 +567,7 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
     );
   }
 
-  // ── Mobile: live video view ──────────────────────────────────────────────
+  // ── iPhone: live video view ──────────────────────────────────────────────
   return (
     <div className="qr-scanner-shell">
       <video ref={videoRef} className="qr-video" />
@@ -526,14 +579,142 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
   );
 }
 
+// ── ScanReceptionPage ─────────────────────────────────────────────────────────
+// Shown when Android native camera opens /reception-scan/:scanToken
+// Reads guest token from localStorage (saved when guest opened their booking link)
+
+function ScanReceptionPage({ scanToken }) {
+  const [status,  setStatus]  = useState("loading"); // loading|success|error|no-session
+  const [errMsg,  setErrMsg]  = useState("");
+  const guestToken = localStorage.getItem("zynloc_guest_token");
+
+  useEffect(() => {
+    if (!guestToken) { setStatus("no-session"); return; }
+    fetch(`${API}/api/guest/${guestToken}/scan-reception`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ receptionToken: scanToken })
+    }).then(async r => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "Failed");
+      setStatus("success");
+    }).catch(err => { setStatus("error"); setErrMsg(err.message); });
+  }, [scanToken]);
+
+  return (
+    <main style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center",
+                   justifyContent: "center", padding: 32, flexDirection: "column", gap: 16 }}>
+      {status === "loading" && <p className="muted">Notifying reception…</p>}
+
+      {status === "no-session" && (
+        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
+          <p style={{ fontSize: 48 }}>🔑</p>
+          <h2 style={{ color: "var(--gold)" }}>Open Your Guest Link First</h2>
+          <p className="muted">Please open the booking link from your email, then scan the reception QR again.</p>
+        </div>
+      )}
+
+      {status === "success" && (
+        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
+          <p style={{ fontSize: 48 }}>✅</p>
+          <h2 style={{ color: "var(--green)" }}>Reception Notified!</h2>
+          <p className="muted">Please wait at the front desk. Staff will confirm your check-in shortly.</p>
+          <a className="primary" href={`/guest/${guestToken}`}
+             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
+          <p style={{ fontSize: 48 }}>❌</p>
+          <p className="error">{errMsg}</p>
+          <a className="secondary" href={`/guest/${guestToken}`}
+             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
+        </div>
+      )}
+    </main>
+  );
+}
+
+// ── ScanFacilityPage ──────────────────────────────────────────────────────────
+// Shown when Android native camera opens /facility-scan/:scanToken
+
+function ScanFacilityPage({ scanToken }) {
+  const [status,  setStatus]  = useState("loading"); // loading|granted|denied|error|no-session
+  const [result,  setResult]  = useState(null);
+  const [errMsg,  setErrMsg]  = useState("");
+  const guestToken = localStorage.getItem("zynloc_guest_token");
+
+  useEffect(() => {
+    if (!guestToken) { setStatus("no-session"); return; }
+    fetch(`${API}/api/guest/${guestToken}/facility-scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ facilityToken: scanToken })
+    }).then(async r => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "Failed");
+      setResult(j);
+      setStatus(j.result === "access_granted" ? "granted" : "denied");
+    }).catch(err => { setStatus("error"); setErrMsg(err.message); });
+  }, [scanToken]);
+
+  return (
+    <main style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center",
+                   justifyContent: "center", padding: 32, flexDirection: "column", gap: 16 }}>
+      {status === "loading" && <p className="muted">Checking access…</p>}
+
+      {status === "no-session" && (
+        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
+          <p style={{ fontSize: 48 }}>🔑</p>
+          <h2 style={{ color: "var(--gold)" }}>Open Your Guest Link First</h2>
+          <p className="muted">Please open the booking link from your email, then scan this QR again.</p>
+        </div>
+      )}
+
+      {status === "granted" && (
+        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
+          <p style={{ fontSize: 64 }}>✅</p>
+          <h2 style={{ color: "var(--green)" }}>Access Granted</h2>
+          <p className="muted">{result?.facilityName} — welcome!</p>
+          <a className="secondary" href={`/guest/${guestToken}`}
+             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
+        </div>
+      )}
+
+      {status === "denied" && (
+        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
+          <p style={{ fontSize: 64 }}>🚫</p>
+          <h2 style={{ color: "var(--red)" }}>Access Denied</h2>
+          <p className="muted">{result?.facilityName} is not included in your package. Contact reception for assistance.</p>
+          <a className="secondary" href={`/guest/${guestToken}`}
+             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
+          <p style={{ fontSize: 48 }}>❌</p>
+          <p className="error">{errMsg}</p>
+          {guestToken && <a className="secondary" href={`/guest/${guestToken}`}
+             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>}
+        </div>
+      )}
+    </main>
+  );
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 function App() {
   const api = useApi();
-  const parts = window.location.pathname.split("/").filter(Boolean);
-  if (parts[0] === "guest" && parts[1]) return <GuestApp token={parts[1]} />;
+  const parts  = window.location.pathname.split("/").filter(Boolean);
   const params = new URLSearchParams(window.location.search);
-  if (parts[0] === "reset-password" && params.get("token")) {
+
+  if (parts[0] === "guest"           && parts[1]) return <GuestApp token={parts[1]} />;
+  if (parts[0] === "reception-scan"  && parts[1]) return <ScanReceptionPage scanToken={parts[1]} />;
+  if (parts[0] === "facility-scan"   && parts[1]) return <ScanFacilityPage  scanToken={parts[1]} />;
+  if (parts[0] === "reset-password"  && params.get("token")) {
     return <ResetPassword resetToken={params.get("token")} />;
   }
   if (!api.token) return <Login api={api} />;
@@ -2426,6 +2607,16 @@ function GuestApp({ token }) {
   }
 
   useEffect(() => { reload(); }, [token]);
+
+  // Persist guest token so ScanReceptionPage / ScanFacilityPage can identify
+  // the guest when the Android native camera opens a scan-reception or
+  // scan-facility URL in a fresh browser tab.
+  useEffect(() => {
+    if (token && payload?.booking?.id) {
+      localStorage.setItem("zynloc_guest_token", token);
+      localStorage.setItem("zynloc_booking_id",  payload.booking.id);
+    }
+  }, [token, payload?.booking?.id]);
 
   // 30-second safety-net refresh — silent, catches missed Socket.IO events
   useEffect(() => {
