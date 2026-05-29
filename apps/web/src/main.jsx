@@ -322,86 +322,87 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 // facingMode: { ideal: "environment" } works on Samsung multi-lens cameras.
 // FALLBACK: Html5Qrcode.scanFile() for image upload when camera is unavailable.
 // Rank a camera device by label — higher score = more likely to be the main back camera.
-// Samsung/Android phones expose labels like "camera2 0, facing back", "0, back-facing", etc.
-function rankCamera(label) {
-  const l = (label || "").toLowerCase();
-  if (l.includes("front") || l.includes("selfie") || l.includes("facing front")) return -10;
-  if (l.includes("ultrawide") || l.includes("ultra wide") || l.includes("0.6x")) return 1;
-  if (l.includes("telephoto") || l.includes("zoom") || l.includes("2x") || l.includes("3x")) return 3;
-  if (l.includes("back") || l.includes("rear") || l.includes("environment") || l.includes("facing back")) return 10;
-  // camera2 index 0 is typically the main back camera on Android
-  const m = l.match(/camera2?\s*(\d)/);
-  if (m) return m[1] === "0" ? 8 : 4;
-  return 5; // unknown — assume back
-}
-
 function QrScanner({ onScan, onClose }) {
-  const videoRef = useRef(null);
+  const videoRef    = useRef(null);
+  const controlsRef = useRef(null);
   const [showFileFallback, setShowFileFallback] = useState(false);
   const [cameraError, setCameraError] = useState(null);
-  const [fileError, setFileError] = useState(null);
-  const [processing, setProcessing] = useState(false);
-  const [devices, setDevices] = useState([]);
-  const [deviceIdx, setDeviceIdx] = useState(0);
+  const [fileError,   setFileError]   = useState(null);
+  const [processing,  setProcessing]  = useState(false);
+  const [cameras,     setCameras]     = useState([]);   // scored devices list
+  const [cameraIdx,   setCameraIdx]   = useState(0);
   const [qrDivId] = useState(() => `qr-file-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
     if (showFileFallback) return;
-    let stopped = false;
-    const controlsRef = { current: null };
+    let cancelled = false;
 
     async function startCamera() {
       try {
-        // Dynamic import — not in initial bundle
-        const { BrowserQRCodeReader } = await import("@zxing/browser");
+        // Step 1: request permission with plain video:true — Samsung Chrome requires
+        // this before enumerateDevices returns labels. Using facingMode here fails on
+        // Samsung because the browser hasn't granted camera access yet.
+        const permStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        permStream.getTracks().forEach(t => t.stop()); // permission obtained; stop immediately
 
-        // Step 1: getUserMedia first — required on Chrome/Android to populate device labels
-        let seedStream = null;
-        try {
-          seedStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
-        } catch {}
-
-        // Step 2: enumerate video devices now that we have permission
+        // Step 2: enumerate — labels now populated
         const allDevices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = allDevices.filter(d => d.kind === "videoinput");
+        if (videoDevices.length === 0) throw new Error("No camera found on this device");
 
-        // Stop the seed stream — we'll open the chosen device next
-        seedStream?.getTracks().forEach(t => t.stop());
+        // Step 3: score each camera — highest score = best rear camera
+        const scored = videoDevices.map(d => {
+          const label = d.label.toLowerCase();
+          let score = 0;
+          if (label.includes("back") || label.includes("rear") || label.includes("environment")) score += 10;
+          if (label.includes("camera2") && label.includes("0")) score += 8;
+          if (label.includes("ultrawide") || label.includes("wide")) score -= 5;
+          if (label.includes("front") || label.includes("user") || label.includes("selfie")) score -= 20;
+          return { device: d, score };
+        });
+        scored.sort((a, b) => b.score - a.score);
+        const scoredDevices = scored.map(s => s.device);
+        if (!cancelled) setCameras(scoredDevices);
 
-        if (videoDevices.length === 0) throw new Error("No camera found");
+        const chosen = scored[cameraIdx]?.device || scored[0]?.device;
 
-        // Step 3: sort by rank (best first)
-        const ranked = [...videoDevices].sort((a, b) => rankCamera(b.label) - rankCamera(a.label));
-        if (!stopped) setDevices(ranked);
-
-        const chosenDevice = ranked[deviceIdx] || ranked[0];
+        // Step 4: lazy-load ZXing and start decoding
+        const { BrowserQRCodeReader } = await import("@zxing/browser");
         const reader = new BrowserQRCodeReader();
+        if (cancelled) return;
 
-        controlsRef.current = await reader.decodeFromVideoDevice(
-          chosenDevice.deviceId,
+        const controls = await reader.decodeFromVideoDevice(
+          chosen.deviceId,
           videoRef.current,
           (result) => {
-            if (stopped || !result) return;
-            stopped = true;
-            try { controlsRef.current?.stop(); } catch {}
+            if (cancelled || !result) return;
+            cancelled = true;
+            try { controls.stop(); } catch {}
             onScan(result.getText());
           }
         );
+        if (cancelled) { try { controls.stop(); } catch {} return; }
+        controlsRef.current = controls;
+
       } catch (err) {
-        if (!stopped) {
-          setCameraError("Camera unavailable: " + (err.message || "permission denied"));
-          setShowFileFallback(true);
+        if (cancelled) return;
+        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+          setCameraError("Camera permission denied. Tap the camera icon in your browser address bar, allow access, then try again.");
+        } else {
+          setCameraError("Could not start camera: " + (err.message || "unknown error"));
         }
+        setShowFileFallback(true);
       }
     }
 
     startCamera();
 
     return () => {
-      stopped = true;
+      cancelled = true;
       try { controlsRef.current?.stop(); } catch {}
+      controlsRef.current = null;
     };
-  }, [showFileFallback, deviceIdx]);
+  }, [showFileFallback, cameraIdx]);
 
   async function decodeFile(file) {
     setFileError(null);
@@ -439,21 +440,15 @@ function QrScanner({ onScan, onClose }) {
             <div className="qr-frame" />
           </div>
           <p className="qr-hint">Point camera at the QR code</p>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            {devices.length > 1 && (
-              <button
-                className="qr-upload-label"
-                style={{ cursor: "pointer" }}
-                onClick={() => setDeviceIdx(i => (i + 1) % devices.length)}
-              >
-                <Camera size={15} /><span>Switch camera</span>
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", justifyContent: "center" }}>
+            {cameras.length > 1 && (
+              <button className="qr-upload-label" style={{ cursor: "pointer" }}
+                onClick={() => setCameraIdx(i => (i + 1) % cameras.length)}>
+                <Camera size={15} /><span>Switch camera ({cameraIdx + 1}/{cameras.length})</span>
               </button>
             )}
-            <button
-              className="qr-upload-label"
-              style={{ cursor: "pointer" }}
-              onClick={() => setShowFileFallback(true)}
-            >
+            <button className="qr-upload-label" style={{ cursor: "pointer" }}
+              onClick={() => setShowFileFallback(true)}>
               <Upload size={15} /><span>Use image</span>
             </button>
           </div>
@@ -461,7 +456,7 @@ function QrScanner({ onScan, onClose }) {
       ) : (
         <div className="qr-file-btns">
           {cameraError && <p className="qr-error">📷 {cameraError}</p>}
-          {fileError && <p className="qr-error">{fileError}</p>}
+          {fileError   && <p className="qr-error">{fileError}</p>}
           {processing ? (
             <p className="qr-hint">Reading QR code…</p>
           ) : (
@@ -475,12 +470,9 @@ function QrScanner({ onScan, onClose }) {
                 <input type="file" accept="image/*" onChange={handleFileChange} />
               </label>
               {!cameraError && (
-                <button
-                  className="ghost"
-                  style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.25)" }}
-                  onClick={() => { setShowFileFallback(false); setFileError(null); }}
-                >
-                  <Camera size={14} /> Try live camera
+                <button className="qr-upload-label" style={{ cursor: "pointer" }}
+                  onClick={() => { setShowFileFallback(false); setFileError(null); }}>
+                  <Camera size={14} /><span>Try live camera</span>
                 </button>
               )}
             </>
@@ -488,12 +480,8 @@ function QrScanner({ onScan, onClose }) {
         </div>
       )}
 
-      <button
-        className="ghost"
-        style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.25)", marginTop: 4 }}
-        onClick={onClose}
-      >
-        Cancel
+      <button className="qr-upload-label" style={{ marginTop: 4, cursor: "pointer" }} onClick={onClose}>
+        <X size={14} /><span>Cancel</span>
       </button>
     </div>
   );
@@ -1011,7 +999,7 @@ function ManagerDashboard({ api, initialSettings }) {
         <div className="brand-lockup"><Hotel size={20} /><span>{me?.hotel_name || "Zynloc"}</span></div>
         <nav>
           {NAV.map(([key, Icon, label]) => {
-            const badge = key === "alerts" ? data.alerts.unresolved.length : 0;
+            const badge = key === "alerts" ? (data.alerts?.unresolved?.length || 0) : 0;
             return (
               <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
                 <Icon size={16} />
@@ -1057,7 +1045,11 @@ function ManagerDashboard({ api, initialSettings }) {
             {active === "packages" && <MgrPackages api={api} data={data} reload={loadAll} show={show} />}
             {active === "service-requests" && <MgrServiceRequests api={api} data={data} reload={loadAll} show={show} />}
             {active === "access-log" && <MgrAccessLog data={data} />}
-            {active === "messages" && <MgrMessages api={api} data={data} reload={loadAll} />}
+            {active === "messages" && (
+              <MgrMessagesErrorBoundary key="messages-boundary" onRetry={loadAll}>
+                <MgrMessages api={api} data={data} reload={loadAll} />
+              </MgrMessagesErrorBoundary>
+            )}
             {active === "staff" && <MgrStaff api={api} data={data} reload={loadAll} show={show} />}
             {active === "analytics" && <MgrAnalytics api={api} data={data} />}
             {active === "settings" && <MgrSettings api={api} data={data} reload={loadAll} show={show} />}
@@ -1634,7 +1626,7 @@ function MgrAlerts({ api, data, reload, show }) {
     );
   }
 
-  const { unresolved, resolved } = data.alerts;
+  const { unresolved = [], resolved = [] } = data.alerts || {};
 
   return (
     <div className="stack">
@@ -1660,34 +1652,56 @@ function MgrAlerts({ api, data, reload, show }) {
   );
 }
 
+// ── Error boundary — catches JS errors inside MgrMessages and shows them ──────
+class MgrMessagesErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(err) { return { error: err }; }
+  componentDidCatch(err) { console.error("[MgrMessages crash]", err); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="panel" style={{ textAlign: "center", padding: 40, display: "flex", flexDirection: "column", gap: 16, alignItems: "center" }}>
+          <MessageSquare size={40} style={{ color: "var(--muted)" }} />
+          <p className="error">Messages failed to load: {this.state.error.message}</p>
+          <button className="secondary" style={{ width: "auto" }}
+            onClick={() => { this.setState({ error: null }); this.props.onRetry?.(); }}>
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function MgrMessages({ api, data, reload }) {
   const [selectedGuestId, setSelectedGuestId] = useState(null);
   const [body, setBody] = useState("");
   const endRef = useRef(null);
 
-  // Group messages by guest — sorted oldest-first within each thread
+  // Group messages by guest — sorted oldest-first within each thread.
+  // Defensive: guard against data.messages / data.guests being null/undefined.
   const conversations = useMemo(() => {
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    const guests   = Array.isArray(data?.guests)   ? data.guests   : [];
     const map = new Map();
-    // Seed map with guests who have at least one message
-    for (const m of data.messages) {
+    for (const m of messages) {
       if (!m.guest_id) continue;
       if (!map.has(m.guest_id)) {
-        const guest = data.guests.find(g => g.id === m.guest_id) || { id: m.guest_id, name: m.guest_name || "Guest" };
+        const guest = guests.find(g => g.id === m.guest_id) || { id: m.guest_id, name: m.guest_name || "Guest" };
         map.set(m.guest_id, { guest, messages: [] });
       }
       map.get(m.guest_id).messages.push(m);
     }
-    // Sort messages within each thread oldest first
     for (const conv of map.values()) {
       conv.messages.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     }
-    // Sort threads by most recent message descending
     return Array.from(map.values()).sort((a, b) => {
       const aLast = a.messages[a.messages.length - 1]?.created_at || 0;
       const bLast = b.messages[b.messages.length - 1]?.created_at || 0;
       return new Date(bLast) - new Date(aLast);
     });
-  }, [data.messages, data.guests]);
+  }, [data?.messages, data?.guests]);
 
   const selectedConv = conversations.find(c => c.guest.id === selectedGuestId) || null;
 
