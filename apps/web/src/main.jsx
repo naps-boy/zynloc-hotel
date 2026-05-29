@@ -8,7 +8,7 @@ import {
 import {
   AlertTriangle, BarChart3, BedDouble, Bell, CalendarDays, Camera,
   Check, CheckCircle, ChevronRight, DoorOpen, Dumbbell, FileDown,
-  Globe, Hotel, LogOut, MessageSquare, Monitor, Navigation, PhoneCall,
+  Globe, Hotel, LogOut, Menu, MessageSquare, Monitor, Navigation, PhoneCall,
   Plus, QrCode, Send, Settings, ShieldCheck, Sparkles, Star, Truck,
   Upload, Users, X, XCircle, Zap, ZoomIn
 } from "lucide-react";
@@ -584,10 +584,13 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
 // Reads guest token from localStorage (saved when guest opened their booking link)
 
 function ScanReceptionPage({ scanToken }) {
-  const [status,  setStatus]  = useState("loading"); // loading|success|error|no-session
-  const [errMsg,  setErrMsg]  = useState("");
+  const [status,     setStatus]     = useState("loading"); // loading|waiting|checked-in|revoked|error|no-session
+  const [errMsg,     setErrMsg]     = useState("");
+  const [roomNumber, setRoomNumber] = useState("");
   const guestToken = localStorage.getItem("zynloc_guest_token");
+  const bookingId  = localStorage.getItem("zynloc_booking_id");
 
+  // Step 1 — notify reception via API
   useEffect(() => {
     if (!guestToken) { setStatus("no-session"); return; }
     fetch(`${API}/api/guest/${guestToken}/scan-reception`, {
@@ -597,42 +600,68 @@ function ScanReceptionPage({ scanToken }) {
     }).then(async r => {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "Failed");
-      setStatus("success");
+      setStatus("waiting"); // reception notified — now wait for live confirmation
     }).catch(err => { setStatus("error"); setErrMsg(err.message); });
   }, [scanToken]);
 
+  // Step 2 — Socket.IO: update instantly when manager confirms check-in
+  useEffect(() => {
+    if (!bookingId || !guestToken) return;
+    const socket = io(API, { reconnection: true });
+    socket.emit("guest:join", bookingId);
+    socket.on("connect",          () => socket.emit("guest:join", bookingId)); // re-join on reconnect
+    socket.on("checkin:confirmed", ({ roomNumber: rn }) => { setRoomNumber(rn || ""); setStatus("checked-in"); });
+    socket.on("access:revoked",    () => setStatus("revoked"));
+    return () => socket.disconnect();
+  }, [bookingId]);
+
+  const S = { minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center",
+              justifyContent: "center", padding: 32, flexDirection: "column", gap: 16 };
+  const C = { textAlign: "center", maxWidth: 340, display: "flex", flexDirection: "column",
+              gap: 12, alignItems: "center" };
+
+  if (status === "loading")    return <main style={S}><p className="muted">Notifying reception…</p></main>;
+  if (status === "no-session") return (
+    <main style={S}><div style={C}>
+      <p style={{ fontSize: 48 }}>🔑</p>
+      <h2 style={{ color: "var(--gold)" }}>Open Your Guest Link First</h2>
+      <p className="muted">Open your booking email link first, then scan the reception QR again.</p>
+    </div></main>
+  );
+  if (status === "error") return (
+    <main style={S}><div style={C}>
+      <p style={{ fontSize: 48 }}>❌</p>
+      <p className="error">{errMsg}</p>
+      {guestToken && <a className="secondary" href={`/guest/${guestToken}`} style={{ textDecoration: "none" }}>Back</a>}
+    </div></main>
+  );
+  if (status === "revoked") return (
+    <main style={S}><div style={C}>
+      <p style={{ fontSize: 48 }}>⛔</p>
+      <h2 style={{ color: "var(--red)" }}>Access Revoked</h2>
+      <p className="muted">Please contact the front desk for assistance.</p>
+    </div></main>
+  );
+  if (status === "checked-in") return (
+    <main style={{ ...S, background: "var(--bg)" }}><div style={C}>
+      <p style={{ fontSize: 80 }}>🎉</p>
+      <h2 style={{ color: "var(--green)", fontSize: 28, fontWeight: 800 }}>You Are Checked In!</h2>
+      {roomNumber && <p style={{ fontSize: 22, color: "var(--gold)", fontWeight: 700 }}>Room {roomNumber}</p>}
+      <p className="muted">Welcome! Your room is ready.</p>
+      <a className="primary" href={`/guest/${guestToken}`} style={{ textDecoration: "none", marginTop: 8 }}>
+        Go to My Room →
+      </a>
+    </div></main>
+  );
+  // waiting
   return (
-    <main style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center",
-                   justifyContent: "center", padding: 32, flexDirection: "column", gap: 16 }}>
-      {status === "loading" && <p className="muted">Notifying reception…</p>}
-
-      {status === "no-session" && (
-        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
-          <p style={{ fontSize: 48 }}>🔑</p>
-          <h2 style={{ color: "var(--gold)" }}>Open Your Guest Link First</h2>
-          <p className="muted">Please open the booking link from your email, then scan the reception QR again.</p>
-        </div>
-      )}
-
-      {status === "success" && (
-        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
-          <p style={{ fontSize: 48 }}>✅</p>
-          <h2 style={{ color: "var(--green)" }}>Reception Notified!</h2>
-          <p className="muted">Please wait at the front desk. Staff will confirm your check-in shortly.</p>
-          <a className="primary" href={`/guest/${guestToken}`}
-             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
-        </div>
-      )}
-
-      {status === "error" && (
-        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
-          <p style={{ fontSize: 48 }}>❌</p>
-          <p className="error">{errMsg}</p>
-          <a className="secondary" href={`/guest/${guestToken}`}
-             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
-        </div>
-      )}
-    </main>
+    <main style={S}><div style={C}>
+      <div style={{ width: 56, height: 56, borderRadius: "50%", border: "4px solid var(--border)",
+                    borderTopColor: "var(--gold)", animation: "spin .8s linear infinite" }} />
+      <h2 style={{ color: "var(--gold)" }}>Reception Notified!</h2>
+      <p className="muted">Please wait at the front desk.</p>
+      <p className="muted" style={{ fontSize: 12 }}>This screen updates automatically when staff confirm.</p>
+    </div></main>
   );
 }
 
@@ -1104,7 +1133,9 @@ function ManagerDashboard({ api, initialSettings }) {
     staff: [], accessLog: [], serviceRequests: [],
     alerts: { unresolved: [], resolved: [] },
   });
-  const [sessionCount, setSessionCount] = useState(1);
+  const [sessionCount,    setSessionCount]    = useState(1);
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [menuOpen,        setMenuOpen]        = useState(false);
   const { toast, show } = useToast();
 
   const NAV = [
@@ -1124,11 +1155,11 @@ function ManagerDashboard({ api, initialSettings }) {
   ];
 
   const BOTTOM_NAV = [
-    ["overview", BarChart3, "Overview"],
-    ["rooms", BedDouble, "Rooms"],
-    ["bookings", CalendarDays, "Bookings"],
-    ["guests", Users, "Guests"],
-    ["messages", MessageSquare, "Messages"],
+    ["overview",  BarChart3,     "Overview"],
+    ["bookings",  CalendarDays,  "Bookings"],
+    ["guests",    Users,         "Guests"],
+    ["messages",  MessageSquare, "Messages"],
+    ["alerts",    Bell,          "Alerts"],
   ];
 
   // History-aware navigation — enables browser back/forward
@@ -1179,8 +1210,8 @@ function ManagerDashboard({ api, initialSettings }) {
 
   useEffect(() => {
     loadAll().catch(() => api.logout());
-    // BUG 3: 30-second safety-net poll — catches anything Socket.IO missed
-    const interval = setInterval(() => { loadAllRef.current(); }, 30_000);
+    // 10-second safety-net poll — catches anything Socket.IO missed
+    const interval = setInterval(() => { loadAllRef.current(); }, 10_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1192,9 +1223,14 @@ function ManagerDashboard({ api, initialSettings }) {
     if (!me?.hotel_id) return;
     const hotelId = me.hotel_id;
     const doLoad = () => loadAllRef.current();
-    const socket = io(API);
-    // Re-join hotel room on every (re)connect so Render restarts don't break sync
-    socket.on("connect", () => socket.emit("hotel:join", hotelId));
+    const socket = io(API, { reconnection: true });
+    // Re-join + re-fetch on every (re)connect so Render restarts don't break sync
+    socket.on("connect", () => {
+      socket.emit("hotel:join", hotelId);
+      setSocketConnected(true);
+      doLoad(); // re-fetch on reconnect — catches anything missed while disconnected
+    });
+    socket.on("disconnect", () => setSocketConnected(false));
     socket.emit("hotel:join", hotelId);
     ["rooms:changed","bookings:changed","messages:new","notifications:new",
      "service-requests:new","service-requests:changed","new:alert"].forEach(ev => socket.on(ev, doLoad));
@@ -1218,6 +1254,39 @@ function ManagerDashboard({ api, initialSettings }) {
 
   return (
     <main className="app-shell">
+      {/* ── Mobile hamburger menu overlay ────────────────────────────────── */}
+      {menuOpen && (
+        <div className="mobile-menu-overlay" onClick={() => setMenuOpen(false)}>
+          <div className="mobile-menu-panel" onClick={e => e.stopPropagation()}>
+            <div className="mobile-menu-header">
+              <div className="brand-lockup" style={{ padding: 0 }}>
+                <Hotel size={20} /><span>{me?.hotel_name || "Zynloc"}</span>
+              </div>
+              <button className="icon-btn" onClick={() => setMenuOpen(false)}><X size={22} /></button>
+            </div>
+            <nav className="mobile-menu-nav">
+              {NAV.map(([key, Icon, label]) => {
+                const badge = key === "alerts"   ? (data.alerts?.unresolved?.length || 0)
+                            : key === "messages" ? totalUnreadMessages
+                            : 0;
+                return (
+                  <button key={key}
+                    className={`mobile-menu-item ${active === key ? "active" : ""}`}
+                    onClick={() => { navigate(key); setMenuOpen(false); }}>
+                    <Icon size={20} />
+                    <span style={{ flex: 1 }}>{label}</span>
+                    {badge > 0 && <span className="nav-badge">{badge}</span>}
+                  </button>
+                );
+              })}
+            </nav>
+            <button className="logout" style={{ marginTop: "auto" }} onClick={api.logout}>
+              <LogOut size={16} />Logout
+            </button>
+          </div>
+        </div>
+      )}
+
       <aside className="sidebar">
         <div className="brand-lockup"><Hotel size={20} /><span>{me?.hotel_name || "Zynloc"}</span></div>
         <nav>
@@ -1239,6 +1308,10 @@ function ManagerDashboard({ api, initialSettings }) {
 
       <section className="workspace">
         <header className="topbar">
+          {/* Hamburger — hidden on desktop, shown on mobile */}
+          <button className="hamburger-btn" onClick={() => setMenuOpen(true)} aria-label="Open menu">
+            <Menu size={22} />
+          </button>
           <div>
             <p className="eyebrow">Manager dashboard</p>
             <h1>{activeLabel}</h1>
@@ -1256,6 +1329,9 @@ function ManagerDashboard({ api, initialSettings }) {
               <span>{me?.name?.[0] || "M"}</span>
               <strong>{me?.name || "Manager"}</strong>
             </div>
+            {/* Connection indicator */}
+            <div className={`conn-dot ${socketConnected ? "connected" : ""}`}
+                 title={socketConnected ? "Live — connected" : "Reconnecting…"} />
           </div>
         </header>
 
@@ -1282,13 +1358,28 @@ function ManagerDashboard({ api, initialSettings }) {
         </section>
       </section>
 
-      {/* Mobile bottom navigation — visible on phones (≤600px via CSS) */}
+      {/* Mobile bottom navigation — visible on phones (≤768px via CSS) */}
       <nav className="mgr-bottom-nav">
-        {BOTTOM_NAV.map(([key, Icon, label]) => (
-          <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
-            <Icon size={22} /><span>{label}</span>
-          </button>
-        ))}
+        {BOTTOM_NAV.map(([key, Icon, label]) => {
+          const badge = key === "alerts"   ? (data.alerts?.unresolved?.length || 0)
+                      : key === "messages" ? totalUnreadMessages
+                      : 0;
+          return (
+            <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
+              <div style={{ position: "relative" }}>
+                <Icon size={22} />
+                {badge > 0 && (
+                  <span style={{ position: "absolute", top: -6, right: -8,
+                                 background: "var(--red)", color: "#fff", borderRadius: 9,
+                                 minWidth: 16, height: 16, fontSize: 9, fontWeight: 700,
+                                 display: "flex", alignItems: "center", justifyContent: "center",
+                                 padding: "0 3px" }}>{badge}</span>
+                )}
+              </div>
+              <span>{label}</span>
+            </button>
+          );
+        })}
       </nav>
 
       <Toast toast={toast} />
@@ -2618,11 +2709,11 @@ function GuestApp({ token }) {
     }
   }, [token, payload?.booking?.id]);
 
-  // 30-second safety-net refresh — silent, catches missed Socket.IO events
+  // 10-second safety-net refresh — silent, catches missed Socket.IO events
   useEffect(() => {
     const id = setInterval(() => {
       gReq("").then(d => { setPayload(d); }).catch(() => {});
-    }, 30_000);
+    }, 10_000);
     return () => clearInterval(id);
   }, [token]);
 

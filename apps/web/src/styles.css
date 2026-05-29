@@ -301,6 +301,45 @@ button.ghost.danger{color:var(--red);border-color:var(--red)}.ghost.danger:hover
 .qr-hint{color:#fff;font-size:15px;background:rgba(0,0,0,.6);padding:8px 16px;border-radius:20px;display:inline-block}
 .close-camera{position:absolute;bottom:40px;z-index:2002;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:var(--radius);padding:10px 24px;font-size:14px;cursor:pointer}
 @media(max-width:600px){.chat-sidebar{width:200px}.chat-shell{font-size:13px}.guest-chat-shell{height:calc(100vh - 140px)}}
+/* ── Connection dot ─────────────────────────────────────────────────── */
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s}
+.conn-dot.connected{background:var(--green)}
+/* ── Hamburger button — hidden on desktop ───────────────────────────── */
+.hamburger-btn{display:none;align-items:center;justify-content:center;background:transparent;color:var(--muted);padding:6px;border-radius:8px;border:1px solid var(--border);flex-shrink:0;cursor:pointer;transition:color .15s}
+.hamburger-btn:hover{color:var(--text);border-color:var(--gold)}
+/* ── Mobile full-screen menu ────────────────────────────────────────── */
+.mobile-menu-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.6);backdrop-filter:blur(4px)}
+.mobile-menu-panel{position:fixed;top:0;left:0;bottom:0;width:280px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px 16px;gap:4px;overflow-y:auto}
+.mobile-menu-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.mobile-menu-nav{display:flex;flex-direction:column;gap:2px}
+.mobile-menu-item{display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:var(--radius);background:transparent;color:var(--muted);text-align:left;width:100%;font-size:15px;cursor:pointer;transition:all .15s;border:none}
+.mobile-menu-item:hover{background:var(--gold-glow);color:var(--gold)}
+.mobile-menu-item.active{background:var(--gold-glow);color:var(--gold);font-weight:600}
+/* ── Mobile layout overrides — 768px ────────────────────────────────── */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .hamburger-btn{display:flex}
+  .mgr-bottom-nav{display:flex}
+  .workspace{flex:1;min-width:0}
+  .main-pane{padding:14px 14px 82px}
+  .topbar{padding:10px 14px;gap:10px;flex-wrap:nowrap}
+  .topbar h1{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .topbar .eyebrow{display:none}
+  .metrics{gap:10px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}
+  .split{grid-template-columns:1fr}
+  .analytics-grid{grid-template-columns:1fr}
+  .form-grid{grid-template-columns:1fr}
+  .service-grid{grid-template-columns:1fr}
+  .inline-form{flex-direction:column}
+  .inline-form input,.inline-form select{min-width:0}
+  .overview-grid{grid-template-columns:1fr 1fr}
+  .stat-card strong{font-size:24px}
+  .chat-shell{height:calc(100vh - 140px)}
+  .chat-sidebar{width:180px}
+  .guest-chat-shell{height:calc(100vh - 130px)}
+  .settings-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap}
+  .settings-tabs button{flex-shrink:0}
+}
 /* ── Android native camera instruction UI ───────────────────────────── */
 .qr-android-ui{display:flex;flex-direction:column;align-items:center;gap:20px;padding:32px 24px;background:var(--bg2);border:1px solid var(--border);border-radius:20px;max-width:320px;width:100%;text-align:center}
 .qr-android-icon{font-size:64px;line-height:1}
