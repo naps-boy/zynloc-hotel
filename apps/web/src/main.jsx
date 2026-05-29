@@ -318,171 +318,114 @@ function ZoomImg({ src, alt = "", className = "", block = false }) {
 }
 
 // ── QrScanner ─────────────────────────────────────────────────────────────────
-// PRIMARY: Live continuous video via @zxing/browser BrowserQRCodeReader.
-// facingMode: { ideal: "environment" } works on Samsung multi-lens cameras.
-// FALLBACK: Html5Qrcode.scanFile() for image upload when camera is unavailable.
-// Rank a camera device by label — higher score = more likely to be the main back camera.
-function QrScanner({ onScan, onClose }) {
-  const videoRef    = useRef(null);
-  const controlsRef = useRef(null);
-  const [showFileFallback, setShowFileFallback] = useState(false);
-  const [cameraError, setCameraError] = useState(null);
-  const [fileError,   setFileError]   = useState(null);
-  const [processing,  setProcessing]  = useState(false);
-  const [cameras,     setCameras]     = useState([]);   // scored devices list
-  const [cameraIdx,   setCameraIdx]   = useState(0);
-  const [qrDivId] = useState(() => `qr-file-${Math.random().toString(36).slice(2)}`);
+// MOBILE (Android/iPhone): file-input capture — zero permission prompts,
+//   works on every phone. Uses jsqr (dynamic import) to decode the image.
+// DESKTOP: guest search box — no camera needed.
 
-  useEffect(() => {
-    if (showFileFallback) return;
-    let cancelled = false;
+async function decodeQRFromFile(file) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    reader.onerror = () => reject(new Error("File read failed"));
+    reader.readAsDataURL(file);
+  });
 
-    async function startCamera() {
-      try {
-        // Step 1: request permission with plain video:true — Samsung Chrome requires
-        // this before enumerateDevices returns labels. Using facingMode here fails on
-        // Samsung because the browser hasn't granted camera access yet.
-        const permStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        permStream.getTracks().forEach(t => t.stop()); // permission obtained; stop immediately
-
-        // Step 2: enumerate — labels now populated
-        const allDevices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = allDevices.filter(d => d.kind === "videoinput");
-        if (videoDevices.length === 0) throw new Error("No camera found on this device");
-
-        // Step 3: score each camera — highest score = best rear camera
-        const scored = videoDevices.map(d => {
-          const label = d.label.toLowerCase();
-          let score = 0;
-          if (label.includes("back") || label.includes("rear") || label.includes("environment")) score += 10;
-          if (label.includes("camera2") && label.includes("0")) score += 8;
-          if (label.includes("ultrawide") || label.includes("wide")) score -= 5;
-          if (label.includes("front") || label.includes("user") || label.includes("selfie")) score -= 20;
-          return { device: d, score };
-        });
-        scored.sort((a, b) => b.score - a.score);
-        const scoredDevices = scored.map(s => s.device);
-        if (!cancelled) setCameras(scoredDevices);
-
-        const chosen = scored[cameraIdx]?.device || scored[0]?.device;
-
-        // Step 4: lazy-load ZXing and start decoding
-        const { BrowserQRCodeReader } = await import("@zxing/browser");
-        const reader = new BrowserQRCodeReader();
-        if (cancelled) return;
-
-        const controls = await reader.decodeFromVideoDevice(
-          chosen.deviceId,
-          videoRef.current,
-          (result) => {
-            if (cancelled || !result) return;
-            cancelled = true;
-            try { controls.stop(); } catch {}
-            onScan(result.getText());
-          }
-        );
-        if (cancelled) { try { controls.stop(); } catch {} return; }
-        controlsRef.current = controls;
-
-      } catch (err) {
-        if (cancelled) return;
-        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-          setCameraError("Camera permission denied. Tap the camera icon in your browser address bar, allow access, then try again.");
-        } else {
-          setCameraError("Could not start camera: " + (err.message || "unknown error"));
-        }
-        setShowFileFallback(true);
-      }
-    }
-
-    startCamera();
-
-    return () => {
-      cancelled = true;
-      try { controlsRef.current?.stop(); } catch {}
-      controlsRef.current = null;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      const imageData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+      const { default: jsQR } = await import("jsqr");
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" })
+                || jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "onlyInvert" });
+      code ? resolve(code.data) : reject(new Error("No QR code detected"));
     };
-  }, [showFileFallback, cameraIdx]);
+    img.onerror = () => reject(new Error("Image failed to load"));
+    img.src = dataUrl;
+  });
+}
 
-  async function decodeFile(file) {
-    setFileError(null);
-    setProcessing(true);
-    try {
-      const { Html5Qrcode } = await import("html5-qrcode");
-      const scanner = new Html5Qrcode(qrDivId);
-      try {
-        const result = await scanner.scanFile(file, false);
-        onScan(result);
-      } finally {
-        try { scanner.clear(); } catch {}
-      }
-    } catch {
-      setFileError("QR code not detected. Make sure the image is clear and try again.");
-      setProcessing(false);
-    }
+function QrScanner({ onScan, onClose, bookings = [] }) {
+  const [status, setStatus] = useState("idle"); // idle | scanning | success | error
+  const [error,  setError]  = useState(null);
+  const [search, setSearch] = useState("");
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  // ── Desktop mode: guest search ───────────────────────────────────────────
+  if (!isMobile) {
+    const filtered = bookings.filter(b =>
+      ((b.guest_name  || "").toLowerCase().includes(search.toLowerCase()) ||
+       (b.guest_email || "").toLowerCase().includes(search.toLowerCase())) &&
+      b.status !== "past" && !b.revoked
+    );
+    return (
+      <div className="qr-scanner-shell">
+        <div className="qr-desktop-search">
+          <h3 style={{ margin: 0, fontSize: 16 }}>Find Guest</h3>
+          <input
+            placeholder="Type guest name or email…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            autoFocus
+            style={{ width: "100%" }}
+          />
+          <div className="qr-guest-results">
+            {filtered.map(b => (
+              <div key={b.id} className="qr-guest-row" onClick={() => onScan(b.qr_token)}>
+                {b.selfie_url && <img src={b.selfie_url} className="qr-guest-avatar" alt="" />}
+                <div>
+                  <div className="qr-guest-name">{b.guest_name}</div>
+                  <div className="qr-guest-email">{b.guest_email}</div>
+                </div>
+              </div>
+            ))}
+            {search && filtered.length === 0 && (
+              <p className="qr-no-results">No matching guests found</p>
+            )}
+          </div>
+          <button className="secondary" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    );
   }
 
-  function handleFileChange(e) {
+  // ── Mobile mode: file-input capture ─────────────────────────────────────
+  async function handleFileChange(e) {
     const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) decodeFile(file);
+    if (!file) return;
+    setStatus("scanning");
+    setError(null);
+    try {
+      const result = await decodeQRFromFile(file);
+      setStatus("success");
+      onScan(result);
+    } catch {
+      setStatus("error");
+      setError("QR code not detected. Make sure the QR code fills most of the photo and is well lit. Try again.");
+    }
   }
 
   return (
     <div className="qr-scanner-shell">
-      <div id={qrDivId} style={{ display: "none" }} />
-      <button className="close-camera" onClick={onClose}><X size={24} /></button>
-
-      {!showFileFallback ? (
-        <>
-          <div className="qr-viewfinder">
-            <video ref={videoRef} className="qr-video" playsInline muted autoPlay />
-            <div className="qr-frame" />
-          </div>
-          <p className="qr-hint">Point camera at the QR code</p>
-          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", justifyContent: "center" }}>
-            {cameras.length > 1 && (
-              <button className="qr-upload-label" style={{ cursor: "pointer" }}
-                onClick={() => setCameraIdx(i => (i + 1) % cameras.length)}>
-                <Camera size={15} /><span>Switch camera ({cameraIdx + 1}/{cameras.length})</span>
-              </button>
-            )}
-            <button className="qr-upload-label" style={{ cursor: "pointer" }}
-              onClick={() => setShowFileFallback(true)}>
-              <Upload size={15} /><span>Use image</span>
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="qr-file-btns">
-          {cameraError && <p className="qr-error">📷 {cameraError}</p>}
-          {fileError   && <p className="qr-error">{fileError}</p>}
-          {processing ? (
-            <p className="qr-hint">Reading QR code…</p>
-          ) : (
-            <>
-              <label className="qr-capture-label">
-                <Camera size={20} /><span>Take Photo of QR Code</span>
-                <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} />
-              </label>
-              <label className="qr-upload-label">
-                <Upload size={18} /><span>Upload from Gallery</span>
-                <input type="file" accept="image/*" onChange={handleFileChange} />
-              </label>
-              {!cameraError && (
-                <button className="qr-upload-label" style={{ cursor: "pointer" }}
-                  onClick={() => { setShowFileFallback(false); setFileError(null); }}>
-                  <Camera size={14} /><span>Try live camera</span>
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      <button className="qr-upload-label" style={{ marginTop: 4, cursor: "pointer" }} onClick={onClose}>
-        <X size={14} /><span>Cancel</span>
-      </button>
+      <div className="qr-file-ui">
+        {status === "scanning" && <p className="qr-loading">Reading QR code…</p>}
+        {error && <p className="qr-error">{error}</p>}
+        <label className="qr-capture-label primary">
+          <Camera size={20} /><span>Take Photo of QR Code</span>
+          <input type="file" accept="image/*" capture="environment"
+            onChange={handleFileChange} style={{ display: "none" }} />
+        </label>
+        <label className="qr-capture-label secondary">
+          <Upload size={18} /><span>Upload from Gallery</span>
+          <input type="file" accept="image/*"
+            onChange={handleFileChange} style={{ display: "none" }} />
+        </label>
+        <p className="qr-hint">Point camera at the QR code and take a clear photo</p>
+        <button className="secondary" onClick={onClose}>Cancel</button>
+      </div>
     </div>
   );
 }
@@ -992,6 +935,9 @@ function ManagerDashboard({ api, initialSettings }) {
   const occupancy = data.rooms.length ? Math.round(occupied / data.rooms.length * 100) : 0;
   const revenue = Math.round((data.analytics?.revenueByRoom || []).reduce((s, r) => s + Number(r.revenue || 0), 0));
   const activeLabel = NAV.find(([k]) => k === active)?.[2] || cap(active);
+  const totalUnreadMessages = Array.isArray(data.messages)
+    ? data.messages.filter(m => m.sender === "guest" && !m.read_at).length
+    : 0;
 
   return (
     <main className="app-shell">
@@ -999,7 +945,9 @@ function ManagerDashboard({ api, initialSettings }) {
         <div className="brand-lockup"><Hotel size={20} /><span>{me?.hotel_name || "Zynloc"}</span></div>
         <nav>
           {NAV.map(([key, Icon, label]) => {
-            const badge = key === "alerts" ? (data.alerts?.unresolved?.length || 0) : 0;
+            const badge = key === "alerts"   ? (data.alerts?.unresolved?.length || 0)
+                        : key === "messages" ? totalUnreadMessages
+                        : 0;
             return (
               <button key={key} className={active === key ? "active" : ""} onClick={() => navigate(key)}>
                 <Icon size={16} />
@@ -1321,7 +1269,7 @@ function MgrBookings({ api, data, reload, show }) {
         </div>
       </div>
 
-      {scanning && <QrScanner onScan={handleCheckinScan} onClose={() => setScanning(false)} />}
+      {scanning && <QrScanner onScan={handleCheckinScan} onClose={() => setScanning(false)} bookings={data.bookings} />}
     </section>
   );
 }
@@ -1676,11 +1624,13 @@ class MgrMessagesErrorBoundary extends React.Component {
 
 function MgrMessages({ api, data, reload }) {
   const [selectedGuestId, setSelectedGuestId] = useState(null);
-  const [body, setBody] = useState("");
+  const [body,            setBody]            = useState("");
+  const [showBroadcast,   setShowBroadcast]   = useState(false);
+  const [broadcastBody,   setBroadcastBody]   = useState("");
+  const [broadcasting,    setBroadcasting]    = useState(false);
+  const [readLocally,     setReadLocally]     = useState(new Set()); // guestIds marked read this session
   const endRef = useRef(null);
 
-  // Group messages by guest — sorted oldest-first within each thread.
-  // Defensive: guard against data.messages / data.guests being null/undefined.
   const conversations = useMemo(() => {
     const messages = Array.isArray(data?.messages) ? data.messages : [];
     const guests   = Array.isArray(data?.guests)   ? data.guests   : [];
@@ -1703,6 +1653,14 @@ function MgrMessages({ api, data, reload }) {
     });
   }, [data?.messages, data?.guests]);
 
+  // Unread count per guest — 0 if already marked read this session
+  function unreadFor(guestId) {
+    if (readLocally.has(guestId)) return 0;
+    return (data?.messages || []).filter(m =>
+      m.guest_id === guestId && m.sender === "guest" && !m.read_at
+    ).length;
+  }
+
   const selectedConv = conversations.find(c => c.guest.id === selectedGuestId) || null;
 
   useEffect(() => {
@@ -1715,6 +1673,16 @@ function MgrMessages({ api, data, reload }) {
       setSelectedGuestId(conversations[0].guest.id);
     }
   }, [conversations.length]);
+
+  // Mark as read when a conversation is opened
+  useEffect(() => {
+    if (!selectedGuestId) return;
+    setReadLocally(prev => new Set([...prev, selectedGuestId])); // instant badge clear
+    api.request("/api/messages/mark-read", {
+      method: "POST",
+      body: JSON.stringify({ guestId: selectedGuestId })
+    }).then(() => reload()).catch(() => {});
+  }, [selectedGuestId]);
 
   async function send(e) {
     e.preventDefault();
@@ -1729,97 +1697,155 @@ function MgrMessages({ api, data, reload }) {
     } catch {}
   }
 
+  async function sendBroadcast(e) {
+    e.preventDefault();
+    if (!broadcastBody.trim()) return;
+    setBroadcasting(true);
+    try {
+      const result = await api.request("/api/messages/broadcast", {
+        method: "POST",
+        body: JSON.stringify({ body: broadcastBody })
+      });
+      setShowBroadcast(false);
+      setBroadcastBody("");
+      reload();
+    } catch {}
+    setBroadcasting(false);
+  }
+
   return (
-    <div className="chat-shell">
-      {/* ── Left sidebar: thread list ─────────────────────────────────── */}
-      <div className="chat-sidebar">
-        <div className="chat-sidebar-header">
-          <MessageSquare size={16} /> Conversations
-        </div>
-        {conversations.length === 0 && (
-          <p className="muted" style={{ padding: "16px 12px", fontSize: 13 }}>No messages yet</p>
-        )}
-        {conversations.map(conv => {
-          const lastMsg = conv.messages[conv.messages.length - 1];
-          return (
-            <div
-              key={conv.guest.id}
-              className={`chat-thread-item ${selectedGuestId === conv.guest.id ? "active" : ""}`}
-              onClick={() => setSelectedGuestId(conv.guest.id)}
-            >
-              <div className="chat-thread-avatar">
-                {conv.guest.selfie_url
-                  ? <img src={conv.guest.selfie_url} alt={conv.guest.name} />
-                  : <span>{conv.guest.name?.[0] || "?"}</span>
-                }
-              </div>
-              <div className="chat-thread-info">
-                <strong>{conv.guest.name}</strong>
-                <p className="chat-thread-preview">{lastMsg?.body?.slice(0, 38) || ""}</p>
-              </div>
-              <span className="chat-thread-time">{fmtTime(lastMsg?.created_at)}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── Right: chat area ──────────────────────────────────────────── */}
-      <div className="chat-main">
-        {selectedConv ? (
-          <>
-            <div className="chat-main-header">
-              <div className="chat-thread-avatar sm">
-                {selectedConv.guest.selfie_url
-                  ? <img src={selectedConv.guest.selfie_url} alt={selectedConv.guest.name} />
-                  : <span>{selectedConv.guest.name?.[0] || "?"}</span>
-                }
-              </div>
-              <div>
-                <strong>{selectedConv.guest.name}</strong>
-                {selectedConv.guest.room_number && (
-                  <small className="muted"> · Room {selectedConv.guest.room_number}</small>
-                )}
-              </div>
-            </div>
-
-            <div className="chat-messages">
-              {selectedConv.messages.map(m => {
-                const isOutgoing = m.sender === "staff";
-                const senderLabel = isOutgoing
-                  ? (m.sender_display_name || m.staff_display_name || m.staff_name || "Staff")
-                  : (m.guest_name || "Guest");
-                return (
-                  <div key={m.id} className={`chat-msg-row ${isOutgoing ? "outgoing" : "incoming"}`}>
-                    <span className="chat-msg-sender">{senderLabel}</span>
-                    <div className={`chat-msg-bubble ${isOutgoing ? "outgoing" : "incoming"}`}>
-                      {m.body}
-                    </div>
-                    <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
-                  </div>
-                );
-              })}
-              <div ref={endRef} />
-            </div>
-
-            <form className="chat-input-bar" onSubmit={send}>
-              <input
-                placeholder="Type a message…"
-                value={body}
-                onChange={e => setBody(e.target.value)}
+    <>
+      {/* ── Emergency broadcast modal ─────────────────────────────────── */}
+      {showBroadcast && (
+        <div className="modal-overlay" onClick={() => setShowBroadcast(false)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <h2 style={{ color: "var(--red)", marginBottom: 4 }}>⚠️ Emergency Broadcast</h2>
+            <p className="muted" style={{ fontSize: 13, marginBottom: 16 }}>
+              This message will be sent to <strong>all checked-in guests</strong> immediately.
+            </p>
+            <form className="stack" onSubmit={sendBroadcast}>
+              <textarea
+                placeholder="e.g. Fire drill at 3pm. Please proceed to the main entrance."
+                value={broadcastBody}
+                onChange={e => setBroadcastBody(e.target.value)}
+                rows={4}
+                required
+                autoFocus
               />
-              <button type="submit" className="chat-send-btn" disabled={!body.trim()}>
-                <Send size={18} />
-              </button>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button type="submit" className="primary" style={{ background: "var(--red)", flex: 1 }}
+                  disabled={broadcasting || !broadcastBody.trim()}>
+                  {broadcasting ? "Sending…" : "Send to All Guests"}
+                </button>
+                <button type="button" className="secondary" onClick={() => setShowBroadcast(false)}>
+                  Cancel
+                </button>
+              </div>
             </form>
-          </>
-        ) : (
-          <div className="chat-empty-state">
-            <MessageSquare size={40} style={{ color: "var(--muted)" }} />
-            <p className="muted">Select a conversation</p>
           </div>
-        )}
+        </div>
+      )}
+
+      <div className="chat-shell">
+        {/* ── Left sidebar ─────────────────────────────────────────────── */}
+        <div className="chat-sidebar">
+          <div className="chat-sidebar-header" style={{ justifyContent: "space-between" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <MessageSquare size={16} /> Conversations
+            </span>
+            <button
+              title="Emergency Broadcast"
+              onClick={() => setShowBroadcast(true)}
+              style={{ background: "rgba(239,95,95,.15)", border: "1px solid rgba(239,95,95,.4)",
+                       color: "var(--red)", borderRadius: 6, padding: "3px 8px", fontSize: 12,
+                       cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+              📢 Broadcast
+            </button>
+          </div>
+          {conversations.length === 0 && (
+            <p className="muted" style={{ padding: "16px 12px", fontSize: 13 }}>No messages yet</p>
+          )}
+          {conversations.map(conv => {
+            const lastMsg  = conv.messages[conv.messages.length - 1];
+            const unread   = unreadFor(conv.guest.id);
+            const isBcast  = lastMsg?.broadcast && !lastMsg?.guest_id;
+            const preview  = isBcast ? `📢 ${lastMsg.body}` : (lastMsg?.body?.slice(0, 38) || "");
+            return (
+              <div key={conv.guest.id}
+                className={`chat-thread-item ${selectedGuestId === conv.guest.id ? "active" : ""}`}
+                onClick={() => setSelectedGuestId(conv.guest.id)}>
+                <div className="chat-thread-avatar">
+                  {conv.guest.selfie_url
+                    ? <img src={conv.guest.selfie_url} alt={conv.guest.name} />
+                    : <span>{conv.guest.name?.[0] || "?"}</span>}
+                </div>
+                <div className="chat-thread-info">
+                  <strong>{conv.guest.name}</strong>
+                  <p className="chat-thread-preview">{preview}</p>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
+                  <span className="chat-thread-time">{fmtTime(lastMsg?.created_at)}</span>
+                  {unread > 0 && <span className="nav-badge" style={{ fontSize: 10 }}>{unread}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Right chat area ───────────────────────────────────────────── */}
+        <div className="chat-main">
+          {selectedConv ? (
+            <>
+              <div className="chat-main-header">
+                <div className="chat-thread-avatar sm">
+                  {selectedConv.guest.selfie_url
+                    ? <img src={selectedConv.guest.selfie_url} alt={selectedConv.guest.name} />
+                    : <span>{selectedConv.guest.name?.[0] || "?"}</span>}
+                </div>
+                <div>
+                  <strong>{selectedConv.guest.name}</strong>
+                  {selectedConv.guest.room_number && (
+                    <small className="muted"> · Room {selectedConv.guest.room_number}</small>
+                  )}
+                </div>
+              </div>
+
+              <div className="chat-messages">
+                {selectedConv.messages.map(m => {
+                  const isOutgoing = m.sender === "staff";
+                  const senderLabel = isOutgoing
+                    ? (m.sender_display_name || m.staff_display_name || m.staff_name || "Staff")
+                    : (m.guest_name || "Guest");
+                  return (
+                    <div key={m.id} className={`chat-msg-row ${isOutgoing ? "outgoing" : "incoming"}`}>
+                      {m.broadcast && <span className="broadcast-label">📢 BROADCAST</span>}
+                      <span className="chat-msg-sender">{senderLabel}</span>
+                      <div className={`chat-msg-bubble ${isOutgoing ? "outgoing" : "incoming"}`}>
+                        {m.body}
+                      </div>
+                      <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
+                    </div>
+                  );
+                })}
+                <div ref={endRef} />
+              </div>
+
+              <form className="chat-input-bar" onSubmit={send}>
+                <input placeholder="Type a message…" value={body} onChange={e => setBody(e.target.value)} />
+                <button type="submit" className="chat-send-btn" disabled={!body.trim()}>
+                  <Send size={18} />
+                </button>
+              </form>
+            </>
+          ) : (
+            <div className="chat-empty-state">
+              <MessageSquare size={40} style={{ color: "var(--muted)" }} />
+              <p className="muted">Select a conversation</p>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -2512,7 +2538,7 @@ function GuestHome({ booking, gReq, show, lang, setLang }) {
               <QrCode size={18} />Scan Reception QR
             </button>
           </div>
-          {scanningReception && <QrScanner onScan={handleReceptionScan} onClose={() => setScanningReception(false)} />}
+          {scanningReception && <QrScanner onScan={handleReceptionScan} onClose={() => setScanningReception(false)} bookings={[]} />}
         </div>
       )}
 
@@ -2563,7 +2589,7 @@ function GuestFacilities({ facilities, gReq, show, lang }) {
       <button className="primary scan-btn" onClick={() => setScanning(true)}>
         <QrCode size={18} />{t(lang, "scanFacility")}
       </button>
-      {scanning && <QrScanner onScan={handleScan} onClose={() => setScanning(false)} />}
+      {scanning && <QrScanner onScan={handleScan} onClose={() => setScanning(false)} bookings={[]} />}
       {accessResult && (
         <div className={`access-result ${accessResult.granted ? "granted" : "denied"}`}>
           {accessResult.granted ? <CheckCircle size={44} /> : <XCircle size={44} />}
@@ -2717,8 +2743,11 @@ function GuestMessages({ messages, gReq, reload, show, lang, booking }) {
             : (m.sender_display_name || m.staff_display_name || m.staff_name || hotelName);
           return (
             <div key={m.id} className={`guest-chat-msg ${isGuest ? "outgoing" : "incoming"}`}>
+              {m.broadcast && !isGuest && (
+                <span className="broadcast-label">📢 BROADCAST</span>
+              )}
               <span className="guest-chat-sender">{senderLabel}</span>
-              <div className={`guest-chat-bubble ${isGuest ? "outgoing" : "incoming"}`}>
+              <div className={`guest-chat-bubble ${isGuest ? "outgoing" : "incoming"} ${m.broadcast ? "broadcast" : ""}`}>
                 {m.body}
               </div>
               <span className="guest-chat-time">{fmtTime(m.created_at)}</span>
@@ -2774,7 +2803,7 @@ function GuestCheckout({ booking, gReq, show, lang }) {
         <button className="primary" onClick={() => setScanning(true)}><QrCode size={20} />{t(lang, "checkoutScan")}</button>
         <button className="ghost" onClick={manualCheckout}><Check size={18} />{t(lang, "checkoutConfirm")}</button>
       </div>
-      {scanning && <QrScanner onScan={handleScan} onClose={() => setScanning(false)} />}
+      {scanning && <QrScanner onScan={handleScan} onClose={() => setScanning(false)} bookings={[]} />}
     </div>
   );
 }
