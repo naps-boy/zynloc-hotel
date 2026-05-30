@@ -54,42 +54,52 @@ adminRouter.get("/hotels", asyncHandler(async (_req, res) => {
 
 // ─── GET /api/admin/activity — last 30 days ───────────────────────────────────
 adminRouter.get("/activity", asyncHandler(async (_req, res) => {
-  const { rows } = await query(`
-    SELECT
-      d.day::date                                                                 AS date,
-      COALESCE(ci.checkins,    0)::int                                            AS checkins,
-      COALESCE(co.checkouts,   0)::int                                            AS checkouts,
-      COALESCE(nb.new_bookings,0)::int                                            AS new_bookings,
-      COALESCE(nh.new_hotels,  0)::int                                            AS new_hotels,
-      COALESCE(ms.messages_sent,0)::int                                           AS messages_sent
-    FROM generate_series(
-      (CURRENT_DATE - INTERVAL '29 days')::timestamp,
-      CURRENT_DATE::timestamp,
-      '1 day'::interval
-    ) AS d(day)
-    LEFT JOIN (
-      SELECT DATE(check_in) day, COUNT(*) checkins
-      FROM bookings WHERE check_in >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1
-    ) ci ON ci.day = d.day::date
-    LEFT JOIN (
-      SELECT DATE(check_out) day, COUNT(*) checkouts
-      FROM bookings WHERE check_out >= CURRENT_DATE - INTERVAL '30 days' AND status='past' GROUP BY 1
-    ) co ON co.day = d.day::date
-    LEFT JOIN (
-      SELECT DATE(created_at) day, COUNT(*) new_bookings
-      FROM bookings WHERE created_at >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1
-    ) nb ON nb.day = d.day::date
-    LEFT JOIN (
-      SELECT DATE(created_at) day, COUNT(*) new_hotels
-      FROM hotels WHERE created_at >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1
-    ) nh ON nh.day = d.day::date
-    LEFT JOIN (
-      SELECT DATE(created_at) day, COUNT(*) messages_sent
-      FROM messages WHERE created_at >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1
-    ) ms ON ms.day = d.day::date
-    ORDER BY d.day
+  // Aggregate new bookings per day for the last 30 days
+  const bookingRows = await query(`
+    SELECT DATE(created_at)::text AS date, COUNT(*)::int AS new_bookings
+    FROM bookings
+    WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY 1 ORDER BY 1
   `);
-  res.json(rows);
+
+  // Check-ins per day (using check_in date as proxy)
+  const checkinRows = await query(`
+    SELECT DATE(check_in)::text AS date, COUNT(*)::int AS checkins
+    FROM bookings
+    WHERE check_in >= CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY 1 ORDER BY 1
+  `);
+
+  // New hotels per day
+  const hotelRows = await query(`
+    SELECT DATE(created_at)::text AS date, COUNT(*)::int AS new_hotels
+    FROM hotels
+    WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY 1 ORDER BY 1
+  `);
+
+  // Messages per day
+  const msgRows = await query(`
+    SELECT DATE(created_at)::text AS date, COUNT(*)::int AS messages_sent
+    FROM messages
+    WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY 1 ORDER BY 1
+  `).catch(() => ({ rows: [] }));
+
+  // Merge by date
+  const dateMap = {};
+  const addRow = (rows, key) => {
+    for (const r of rows) {
+      if (!dateMap[r.date]) dateMap[r.date] = { date: r.date, new_bookings: 0, checkins: 0, new_hotels: 0, messages_sent: 0 };
+      dateMap[r.date][key] = r[key];
+    }
+  };
+  addRow(bookingRows.rows, "new_bookings");
+  addRow(checkinRows.rows, "checkins");
+  addRow(hotelRows.rows, "new_hotels");
+  addRow(msgRows.rows, "messages_sent");
+
+  res.json(Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date)));
 }));
 
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
