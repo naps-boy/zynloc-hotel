@@ -119,4 +119,24 @@ await runMigrations();
 server.listen(cfg.port, () => {
   console.log(`Zynloc API listening on ${cfg.port}`);
   startLateCheckoutMonitor();
+
+  // ── KYC document lifecycle ────────────────────────────────────────────────
+  // Runs once per day: marks docs expiring within 30 days, deletes expired ones.
+  setInterval(async () => {
+    try {
+      // Mark docs that expire within 30 days (so UI can warn managers)
+      await pool.query(
+        `UPDATE guest_documents SET notified_before_delete = true
+         WHERE delete_at < now() + INTERVAL '30 days'
+           AND notified_before_delete = false`
+      );
+      // Hard-delete docs whose delete_at has passed
+      const { rowCount } = await pool.query(
+        "DELETE FROM guest_documents WHERE delete_at < now()"
+      );
+      if (rowCount > 0) console.log(`[KYC] Auto-deleted ${rowCount} expired document(s)`);
+    } catch (err) {
+      console.error("[KYC cleanup]", err.message);
+    }
+  }, 24 * 60 * 60 * 1000).unref();
 });

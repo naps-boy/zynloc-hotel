@@ -360,3 +360,38 @@ guestRouter.put("/:token/location", requireValidQr, asyncHandler(async (req, res
   emitHotel(req.qr.hotel_id, "guests:location", { guestId: req.qr.guest_id, location });
   res.json({ ok: true });
 }));
+
+// ─── GET /:token/hotel-kyc — hotel KYC settings (no auth, guest-facing) ──────
+// Returns the hotel's KYC requirements so ProfileSetup can show document upload.
+// Does NOT return guest data or document_data.
+guestRouter.get("/:token/hotel-kyc", asyncHandler(async (req, res) => {
+  const qr = await getQrPayload(req.params.token).catch(() => null);
+  if (!qr) return res.json({ kyc_required: false, kyc_documents: [], hotel_name: "", country: "" });
+  const hotel = (await query(
+    "SELECT name, kyc_required, kyc_documents, country FROM hotels WHERE id = $1",
+    [qr.hotel_id]
+  )).rows[0];
+  if (!hotel) return res.json({ kyc_required: false, kyc_documents: [], hotel_name: "", country: "" });
+  res.json({
+    kyc_required:  hotel.kyc_required  || false,
+    kyc_documents: hotel.kyc_documents || [],
+    hotel_name:    hotel.name          || "",
+    country:       hotel.country       || "",
+  });
+}));
+
+// ─── POST /:token/documents — guest uploads a KYC document ───────────────────
+guestRouter.post("/:token/documents", requireValidQr, asyncHandler(async (req, res) => {
+  const { document_type, document_data } = z.object({
+    document_type: z.string().min(1).max(100),
+    document_data: z.string().min(10),         // base64 data URL
+  }).parse(req.body);
+
+  const { rows } = await query(
+    `INSERT INTO guest_documents (booking_id, hotel_id, document_type, document_data)
+     VALUES ($1, $2, $3, $4) RETURNING id, document_type, uploaded_at, delete_at`,
+    [req.qr.booking_id, req.qr.hotel_id, document_type, document_data]
+  );
+  // Never log document_data
+  res.status(201).json({ ok: true, id: rows[0].id });
+}));

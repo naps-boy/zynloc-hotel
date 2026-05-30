@@ -365,4 +365,25 @@ button.ghost.danger{color:var(--red);border-color:var(--red)}.ghost.danger:hover
 .qr-android-title{font-size:20px;font-weight:700;color:var(--gold);margin:0}
 .qr-android-instruction{font-size:15px;color:var(--text);line-height:1.5;margin:0}
 .qr-android-steps{display:flex;flex-direction:column;gap:8px;width:100%}
-.qr-step{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;color:var(--text);text-align:left}
+.qr-step{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;color:var(--text);text-align:left}/* ── KYC / Document Verification ────────────────────────────────────────────── */
+.kyc-upload-section{display:flex;flex-direction:column;gap:12px;padding:16px;background:var(--bg2);border-radius:12px;margin:12px 0;border:1px solid var(--border)}
+.kyc-notice{background:rgba(255,193,7,.1);border:1px solid rgba(255,193,7,.3);border-radius:8px;padding:12px;font-size:14px;color:var(--text)}
+.kyc-choice{display:flex;flex-direction:column;gap:8px}
+.kyc-doc-uploads{display:flex;flex-direction:column;gap:16px}
+.kyc-doc-item{display:flex;flex-direction:column;gap:8px}
+.kyc-uploaded{color:#4caf50;font-size:13px;font-weight:600}
+.kyc-doc-types{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.kyc-doc-tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.kyc-tag{display:flex;align-items:center;gap:4px;background:var(--gold);color:#000;padding:4px 10px;border-radius:20px;font-size:13px;font-weight:600}
+.kyc-tag button{background:none;border:none;cursor:pointer;font-size:16px;color:#000;padding:0;line-height:1}
+.guest-docs-section{margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
+.guest-docs-section h4{margin:0 0 10px;font-size:14px;font-weight:700}
+.guest-doc-item{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}
+.guest-doc-item span{flex:1;font-size:14px}
+.settings-section{margin-top:24px;padding-top:24px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:12px}
+.settings-hint{font-size:13px;color:var(--muted);margin:0}
+.toggle-label{display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer}
+.toggle-label input[type=checkbox]{width:16px;height:16px;accent-color:var(--gold);cursor:pointer}
+.doc-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px}
+.doc-badge.verified{background:rgba(38,194,129,.15);color:#26c281}
+.doc-badge.pending{background:rgba(255,193,7,.15);color:#ffc107}

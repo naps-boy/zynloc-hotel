@@ -1671,7 +1671,11 @@ function MgrBookings({ api, data, reload, show }) {
 }
 
 function MgrGuests({ api, data, reload, show }) {
-  const [revoking, setRevoking] = useState(null);
+  const [revoking,    setRevoking]    = useState(null);
+  const [expandedId,  setExpandedId]  = useState(null);   // booking_id of expanded card
+  const [docsMap,     setDocsMap]     = useState({});      // bookingId → doc[]
+  const [viewDoc,     setViewDoc]     = useState(null);    // { src, type } for lightbox
+  const kycRequired = data.settings?.kyc_required || false;
 
   async function revokeBooking(bookingId) {
     setRevoking(bookingId);
@@ -1685,6 +1689,33 @@ function MgrGuests({ api, data, reload, show }) {
     try { await api.request(`/api/bookings/${bookingId}/restore`, { method: "POST" }); reload(); show("Access restored", "success"); }
     catch (err) { show(err.message, "error"); }
     setRevoking(null);
+  }
+
+  async function toggleExpand(bookingId) {
+    if (expandedId === bookingId) { setExpandedId(null); return; }
+    setExpandedId(bookingId);
+    if (!docsMap[bookingId]) {
+      try {
+        const docs = await api.request(`/api/bookings/${bookingId}/documents`);
+        setDocsMap(m => ({ ...m, [bookingId]: docs }));
+      } catch { setDocsMap(m => ({ ...m, [bookingId]: [] })); }
+    }
+  }
+
+  async function viewDocument(bookingId, docId) {
+    try {
+      const doc = await api.request(`/api/bookings/${bookingId}/documents/${docId}/view`);
+      setViewDoc({ src: doc.document_data, type: doc.document_type });
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function deleteDocument(bookingId, docId) {
+    if (!window.confirm("Permanently delete this document?")) return;
+    try {
+      await api.request(`/api/bookings/${bookingId}/documents/${docId}`, { method: "DELETE" });
+      setDocsMap(m => ({ ...m, [bookingId]: (m[bookingId] || []).filter(d => d.id !== docId) }));
+      show("Document deleted", "success");
+    } catch (err) { show(err.message, "error"); }
   }
 
   function getStatus(g) {
@@ -1705,48 +1736,116 @@ function MgrGuests({ api, data, reload, show }) {
   }
 
   return (
-    <div className="guest-cards">
-      {data.guests.map(g => {
-        const status = getStatus(g);
-        const dayProgress = getDayProgress(g);
-        return (
-          <div className={`guest-card ${g.revoked ? "opacity-60" : ""}`} key={g.id}>
-            <div className="guest-card-photo">
-              {g.selfie_url
-                ? <ZoomImg src={g.selfie_url} alt={g.name} className="guest-thumb-img" />
-                : <span className="guest-avatar-initial">{g.name?.[0] || "?"}</span>}
-            </div>
-            <div className="guest-card-body">
-              <div className="guest-card-top">
-                <strong className="guest-card-name">{g.name || "Unknown"}</strong>
-                <span className={`pill ${status}`}>{STATUS_LABEL[status] || status}</span>
-              </div>
-              <small className="muted">{g.email}</small>
-              <div className="guest-card-details">
-                {g.room_number && <span>Room {g.room_number}{g.room_type ? ` · ${g.room_type}` : ""}</span>}
-                {g.check_in && <span>{new Date(g.check_in).toLocaleDateString()} – {new Date(g.check_out).toLocaleDateString()}</span>}
-                {g.package_type && <span>Package: {g.package_type}</span>}
-                {dayProgress && <span className="day-progress">{dayProgress}</span>}
-                {g.current_location && <span>📍 {g.current_location}</span>}
-              </div>
-              {g.booking_id && (
-                <div className="guest-card-actions">
-                  {g.revoked
-                    ? <button className="restore-btn" onClick={() => restoreBooking(g.booking_id)} disabled={revoking === g.booking_id}>
-                        <CheckCircle size={12} />{revoking === g.booking_id ? "…" : "Restore"}
-                      </button>
-                    : <button className="revoke-btn" onClick={() => revokeBooking(g.booking_id)} disabled={revoking === g.booking_id}>
-                        <X size={12} />{revoking === g.booking_id ? "…" : "Revoke"}
-                      </button>
-                  }
-                </div>
-              )}
-            </div>
+    <>
+      {/* Document view lightbox */}
+      {viewDoc && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 9000,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+        }} onClick={() => setViewDoc(null)}>
+          <div style={{ position: "relative", maxWidth: 700, width: "100%" }}
+            onClick={e => e.stopPropagation()}>
+            <p style={{ color: "var(--gold)", fontWeight: 700, marginBottom: 8 }}>{viewDoc.type}</p>
+            <img src={viewDoc.src} alt={viewDoc.type}
+              style={{ width: "100%", borderRadius: 12, maxHeight: "80vh", objectFit: "contain" }} />
+            <button className="ghost" style={{ marginTop: 12 }} onClick={() => setViewDoc(null)}>
+              <X size={16} />Close
+            </button>
           </div>
-        );
-      })}
-      {!data.guests.length && <p className="muted">No guests yet</p>}
-    </div>
+        </div>
+      )}
+
+      <div className="guest-cards">
+        {data.guests.map(g => {
+          const status      = getStatus(g);
+          const dayProgress = getDayProgress(g);
+          const isExpanded  = expandedId === g.booking_id;
+          const docs        = docsMap[g.booking_id] || [];
+          const hasDocs     = docs.length > 0;
+
+          return (
+            <div className={`guest-card ${g.revoked ? "opacity-60" : ""}`} key={g.id}>
+              <div className="guest-card-photo">
+                {g.selfie_url
+                  ? <ZoomImg src={g.selfie_url} alt={g.name} className="guest-thumb-img" />
+                  : <span className="guest-avatar-initial">{g.name?.[0] || "?"}</span>}
+              </div>
+              <div className="guest-card-body">
+                <div className="guest-card-top">
+                  <strong className="guest-card-name">{g.name || "Unknown"}</strong>
+                  <span className={`pill ${status}`}>{STATUS_LABEL[status] || status}</span>
+                  {/* KYC doc badge — shown only when card is expanded */}
+                  {kycRequired && isExpanded && (
+                    <span className={`doc-badge ${hasDocs ? "verified" : "pending"}`}>
+                      {hasDocs ? `✓ ${docs.length} doc${docs.length > 1 ? "s" : ""}` : "⏳ pending"}
+                    </span>
+                  )}
+                </div>
+                <small className="muted">{g.email}</small>
+                <div className="guest-card-details">
+                  {g.room_number && <span>Room {g.room_number}{g.room_type ? ` · ${g.room_type}` : ""}</span>}
+                  {g.check_in && <span>{new Date(g.check_in).toLocaleDateString()} – {new Date(g.check_out).toLocaleDateString()}</span>}
+                  {g.package_type && <span>Package: {g.package_type}</span>}
+                  {dayProgress && <span className="day-progress">{dayProgress}</span>}
+                  {g.current_location && <span>📍 {g.current_location}</span>}
+                </div>
+                {g.booking_id && (
+                  <div className="guest-card-actions">
+                    {g.revoked
+                      ? <button className="restore-btn" onClick={() => restoreBooking(g.booking_id)} disabled={revoking === g.booking_id}>
+                          <CheckCircle size={12} />{revoking === g.booking_id ? "…" : "Restore"}
+                        </button>
+                      : <button className="revoke-btn" onClick={() => revokeBooking(g.booking_id)} disabled={revoking === g.booking_id}>
+                          <X size={12} />{revoking === g.booking_id ? "…" : "Revoke"}
+                        </button>
+                    }
+                    <button className="ghost sm" style={{ marginLeft: "auto" }}
+                      onClick={() => toggleExpand(g.booking_id)}>
+                      <FileDown size={12} />{isExpanded ? "Hide docs" : "Documents"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ── Expanded documents section ──────────────────────── */}
+                {isExpanded && g.booking_id && (
+                  <div className="guest-docs-section">
+                    <h4>Documents</h4>
+                    {docs.length === 0
+                      ? <p className="muted" style={{ fontSize: 13 }}>No documents uploaded</p>
+                      : docs.map(doc => (
+                          <div key={doc.id} className="guest-doc-item">
+                            <span>{doc.document_type}</span>
+                            <span className="muted" style={{ fontSize: 12 }}>
+                              {new Date(doc.uploaded_at).toLocaleDateString()}
+                            </span>
+                            <span className="muted" style={{ fontSize: 11 }}>
+                              Deletes {new Date(doc.delete_at).toLocaleDateString()}
+                            </span>
+                            <button className="ghost sm"
+                              onClick={() => viewDocument(g.booking_id, doc.id)}>
+                              <ZoomIn size={12} />View
+                            </button>
+                            <button className="ghost sm" style={{ color: "var(--red)" }}
+                              onClick={() => deleteDocument(g.booking_id, doc.id)}>
+                              <X size={12} />Delete
+                            </button>
+                          </div>
+                        ))
+                    }
+                    {docs.some(d => d.notified_before_delete) && (
+                      <p className="muted" style={{ fontSize: 11, color: "var(--gold)", marginTop: 6 }}>
+                        ⚠ Some documents expire within 30 days
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {!data.guests.length && <p className="muted">No guests yet</p>}
+      </div>
+    </>
   );
 }
 
@@ -2869,7 +2968,13 @@ function NavEditor({ api, show }) {
 
 function MgrSettings({ api, data, reload, show }) {
   const s = data.settings || {};
-  const [form, setForm] = useState({ name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "", coverPhotoUrl: s.cover_photo_url || "", receptionPhone: s.reception_phone || "" });
+  const [form, setForm] = useState({
+    name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "",
+    coverPhotoUrl: s.cover_photo_url || "", receptionPhone: s.reception_phone || "",
+    country: s.country || "", kycRequired: s.kyc_required || false,
+    kycDocuments: s.kyc_documents || [],
+  });
+  const [customDoc, setCustomDoc] = useState("");
   const [tab, setTab] = useState("brand");
   const [checkoutQr, setCheckoutQr] = useState(s.checkout_qr || null);
   const [receptionQr, setReceptionQr] = useState(null);
@@ -2883,7 +2988,15 @@ function MgrSettings({ api, data, reload, show }) {
   const [smtpTestTo, setSmtpTestTo] = useState("");
   const [smtpTesting, setSmtpTesting] = useState(null);
 
-  useEffect(() => { setForm({ name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "", coverPhotoUrl: s.cover_photo_url || "", receptionPhone: s.reception_phone || "" }); setCheckoutQr(s.checkout_qr || null); }, [data.settings]);
+  useEffect(() => {
+    setForm({
+      name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "",
+      coverPhotoUrl: s.cover_photo_url || "", receptionPhone: s.reception_phone || "",
+      country: s.country || "", kycRequired: s.kyc_required || false,
+      kycDocuments: s.kyc_documents || [],
+    });
+    setCheckoutQr(s.checkout_qr || null);
+  }, [data.settings]);
 
   useEffect(() => {
     if (tab === "email") api.request("/api/smtp").then(setSmtpConfigs).catch(() => {});
@@ -2935,8 +3048,17 @@ function MgrSettings({ api, data, reload, show }) {
 
   async function saveBrand(e) {
     e.preventDefault();
-    try { await api.request("/api/settings", { method: "PUT", body: JSON.stringify(form) }); reload(); show("Saved", "success"); }
-    catch (err) { show(err.message, "error"); }
+    try {
+      await api.request("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          name: form.name, address: form.address, logoUrl: form.logoUrl,
+          coverPhotoUrl: form.coverPhotoUrl, receptionPhone: form.receptionPhone,
+          country: form.country, kycRequired: form.kycRequired, kycDocuments: form.kycDocuments,
+        }),
+      });
+      reload(); show("Saved", "success");
+    } catch (err) { show(err.message, "error"); }
   }
 
   async function regenQr() {
@@ -2962,6 +3084,82 @@ function MgrSettings({ api, data, reload, show }) {
           <ImageUpload value={form.logoUrl} onChange={v => setForm({ ...form, logoUrl: v })} label="Upload logo" maxWidth={400} />
           <label className="upload-field-label">Cover photo</label>
           <ImageUpload value={form.coverPhotoUrl} onChange={v => setForm({ ...form, coverPhotoUrl: v })} label="Upload cover photo" maxWidth={1200} />
+
+          {/* ── KYC / Document Verification ─────────────────────────────── */}
+          <div className="settings-section">
+            <h3 style={{ margin: 0 }}>Document Verification (KYC)</h3>
+            <p className="settings-hint">Configure what documents guests must provide at check-in.</p>
+
+            <label className="upload-field-label">Country of Operation</label>
+            <input placeholder="e.g. Indonesia, Mauritius, Kenya…"
+              value={form.country}
+              onChange={e => setForm(f => ({ ...f, country: e.target.value }))} />
+
+            <label className="toggle-label">
+              <input type="checkbox" checked={form.kycRequired}
+                onChange={e => setForm(f => ({ ...f, kycRequired: e.target.checked }))} />
+              Require document verification from guests
+            </label>
+
+            {form.kycRequired && (
+              <div className="kyc-doc-types">
+                <p className="settings-hint">Select required document types:</p>
+                {["Passport", "National ID", "Visa", "Driver's License"].map(type => (
+                  <label key={type} className="toggle-label">
+                    <input type="checkbox"
+                      checked={(form.kycDocuments || []).includes(type)}
+                      onChange={e => {
+                        const docs = form.kycDocuments || [];
+                        setForm(f => ({
+                          ...f,
+                          kycDocuments: e.target.checked
+                            ? [...docs, type]
+                            : docs.filter(d => d !== type),
+                        }));
+                      }} />
+                    {type}
+                  </label>
+                ))}
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <input placeholder="Add custom document type…"
+                    value={customDoc}
+                    onChange={e => setCustomDoc(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        if (customDoc.trim()) {
+                          setForm(f => ({ ...f, kycDocuments: [...(f.kycDocuments || []), customDoc.trim()] }));
+                          setCustomDoc("");
+                        }
+                      }
+                    }}
+                    style={{ flex: 1 }} />
+                  <button type="button" className="ghost sm"
+                    onClick={() => {
+                      if (customDoc.trim()) {
+                        setForm(f => ({ ...f, kycDocuments: [...(f.kycDocuments || []), customDoc.trim()] }));
+                        setCustomDoc("");
+                      }
+                    }}>
+                    <Plus size={14} />Add
+                  </button>
+                </div>
+                {(form.kycDocuments || []).length > 0 && (
+                  <div className="kyc-doc-tags">
+                    {(form.kycDocuments || []).map(doc => (
+                      <span key={doc} className="kyc-tag">
+                        {doc}
+                        <button type="button" onClick={() => setForm(f => ({
+                          ...f, kycDocuments: f.kycDocuments.filter(d => d !== doc),
+                        }))}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <button className="primary"><Check size={18} />Save</button>
         </form>
       )}
@@ -3330,25 +3528,58 @@ function GuestApp({ token }) {
 }
 
 function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
-  const [name, setName] = useState(booking.guest_name || "");
-  const [selfie, setSelfie] = useState(null);
-  const [saving, setSaving] = useState(false);
+  const [name,         setName]         = useState(booking.guest_name || "");
+  const [selfie,       setSelfie]       = useState(null);
+  const [saving,       setSaving]       = useState(false);
+  const [hotelKyc,     setHotelKyc]     = useState({ kyc_required: false, kyc_documents: [], hotel_name: "" });
+  const [kycChoice,    setKycChoice]    = useState(null);   // null | "now" | "later"
+  const [uploadedDocs, setUploadedDocs] = useState({});
+
+  // Fetch hotel KYC settings (no auth needed — public endpoint)
+  useEffect(() => {
+    fetch(`${API}/api/guest/${token}/hotel-kyc`)
+      .then(r => r.json())
+      .then(data => setHotelKyc(data))
+      .catch(() => {});
+  }, [token]);
 
   async function submit(e) {
     e.preventDefault();
     if (!selfie) { show("Please upload a photo first", "error"); return; }
+    // Require KYC choice if KYC is required and selfie is uploaded
+    if (hotelKyc.kyc_required && kycChoice === null) {
+      show("Please choose how to provide your documents", "error"); return;
+    }
     setSaving(true);
     try {
+      // Step 1: save profile + selfie
       const res = await fetch(`${API}/api/guest/${token}/profile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, selfieUrl: selfie })
+        body: JSON.stringify({ name, selfieUrl: selfie }),
       });
       if (!res.ok) throw new Error((await res.json()).error);
+
+      // Step 2: upload documents if guest chose "now"
+      if (kycChoice === "now") {
+        for (const [docType, docData] of Object.entries(uploadedDocs)) {
+          if (docData) {
+            await fetch(`${API}/api/guest/${token}/documents`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ document_type: docType, document_data: docData }),
+            });
+          }
+        }
+      }
+
       show("Profile saved!", "success");
       onComplete();
     } catch (err) { show(err.message, "error"); setSaving(false); }
   }
+
+  const kycDocsDue  = hotelKyc.kyc_required && hotelKyc.kyc_documents?.length > 0;
+  const allUploaded = kycDocsDue && hotelKyc.kyc_documents.every(d => uploadedDocs[d]);
 
   return (
     <main className="guest-shell profile-setup">
@@ -3359,8 +3590,76 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
         <form className="stack" onSubmit={submit}>
           <input required placeholder={t(lang, "yourName")} value={name} onChange={e => setName(e.target.value)} />
           <SelfieCapture onCapture={setSelfie} label={t(lang, "takeSelfie")} hint={t(lang, "selfieHint")} />
-          {selfie && !saving && (
-            <button className="primary" type="submit"><Check size={18} />{t(lang, "confirmProfile")}</button>
+
+          {/* ── KYC document upload ───────────────────────────────────── */}
+          {selfie && kycDocsDue && (
+            <div className="kyc-upload-section">
+              <div className="kyc-notice">
+                <p style={{ margin: 0 }}>
+                  📄 {hotelKyc.hotel_name} requires document verification.
+                  Documents are stored securely and automatically deleted after 1 year.
+                </p>
+              </div>
+
+              {kycChoice === null && (
+                <div className="kyc-choice">
+                  <button type="button" className="primary"
+                    onClick={() => setKycChoice("now")}>
+                    Upload now — skip paperwork at reception
+                  </button>
+                  <button type="button" className="ghost"
+                    onClick={() => setKycChoice("later")}>
+                    Do at reception — bring documents when I arrive
+                  </button>
+                </div>
+              )}
+
+              {kycChoice === "now" && (
+                <div className="kyc-doc-uploads">
+                  <p className="settings-hint">Please upload the following documents:</p>
+                  {hotelKyc.kyc_documents.map(docType => (
+                    <div key={docType} className="kyc-doc-item">
+                      <label className="upload-field-label">{docType}</label>
+                      <ImageUpload
+                        value={uploadedDocs[docType] || null}
+                        onChange={data => setUploadedDocs(d => ({ ...d, [docType]: data }))}
+                        label={`Upload ${docType}`}
+                        maxWidth={1200}
+                      />
+                      {uploadedDocs[docType] && (
+                        <span className="kyc-uploaded">✓ Uploaded</span>
+                      )}
+                    </div>
+                  ))}
+                  <button type="button" className="ghost sm"
+                    style={{ alignSelf: "flex-start" }}
+                    onClick={() => setKycChoice(null)}>
+                    ← Change choice
+                  </button>
+                </div>
+              )}
+
+              {kycChoice === "later" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    You'll provide documents at reception.
+                  </span>
+                  <button type="button" className="ghost sm"
+                    onClick={() => setKycChoice(null)}>Change</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Show confirm button once selfie is captured and KYC choice is resolved */}
+          {selfie && !saving && (kycChoice !== null || !kycDocsDue) && (
+            <button className="primary" type="submit"
+              disabled={kycChoice === "now" && kycDocsDue && !allUploaded}>
+              <Check size={18} />
+              {kycChoice === "now" && kycDocsDue && !allUploaded
+                ? "Upload all documents to continue"
+                : t(lang, "confirmProfile")}
+            </button>
           )}
           {saving && <p className="hint">Saving profile…</p>}
         </form>

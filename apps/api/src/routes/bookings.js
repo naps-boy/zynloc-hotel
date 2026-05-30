@@ -161,3 +161,57 @@ bookingsRouter.delete("/:id", asyncHandler(async (req, res) => {
   emitHotel(req.user.hotelId, "bookings:changed", rows[0]);
   res.json(rows[0]);
 }));
+
+// ─── KYC document management (manager-only) ───────────────────────────────────
+
+// GET /:id/documents — list documents for a booking (no document_data)
+bookingsRouter.get("/:id/documents", asyncHandler(async (req, res) => {
+  // Verify booking belongs to this hotel
+  const booking = (await query(
+    "SELECT id FROM bookings WHERE id = $1 AND hotel_id = $2",
+    [req.params.id, req.user.hotelId]
+  )).rows[0];
+  if (!booking) throw new HttpError(404, "Booking not found");
+
+  const { rows } = await query(
+    `SELECT id, document_type, uploaded_at, delete_at
+       FROM guest_documents
+      WHERE booking_id = $1 AND hotel_id = $2
+      ORDER BY uploaded_at DESC`,
+    [req.params.id, req.user.hotelId]
+  );
+  res.json(rows);
+}));
+
+// GET /:id/documents/:docId/view — view a single document including data
+bookingsRouter.get("/:id/documents/:docId/view", asyncHandler(async (req, res) => {
+  const booking = (await query(
+    "SELECT id FROM bookings WHERE id = $1 AND hotel_id = $2",
+    [req.params.id, req.user.hotelId]
+  )).rows[0];
+  if (!booking) throw new HttpError(404, "Booking not found");
+
+  const { rows } = await query(
+    `SELECT id, document_type, document_data, uploaded_at, delete_at
+       FROM guest_documents
+      WHERE id = $1 AND booking_id = $2 AND hotel_id = $3`,
+    [req.params.docId, req.params.id, req.user.hotelId]
+  );
+  if (!rows.length) throw new HttpError(404, "Document not found");
+  res.json(rows[0]);
+}));
+
+// DELETE /:id/documents/:docId — manager deletes a document
+bookingsRouter.delete("/:id/documents/:docId", asyncHandler(async (req, res) => {
+  const booking = (await query(
+    "SELECT id FROM bookings WHERE id = $1 AND hotel_id = $2",
+    [req.params.id, req.user.hotelId]
+  )).rows[0];
+  if (!booking) throw new HttpError(404, "Booking not found");
+
+  await query(
+    "DELETE FROM guest_documents WHERE id = $1 AND booking_id = $2 AND hotel_id = $3",
+    [req.params.docId, req.params.id, req.user.hotelId]
+  );
+  res.status(204).end();
+}));

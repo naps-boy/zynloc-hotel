@@ -30,26 +30,40 @@ settingsRouter.put("/", requireRole("manager"), asyncHandler(async (req, res) =>
     receptionPhone:     z.string().optional(),
     floorPlanUrl:       z.string().optional(),
     floorPlanMarkers:   z.array(z.any()).optional(),
-    onboardingComplete: z.boolean().optional()
+    onboardingComplete: z.boolean().optional(),
+    // KYC fields
+    country:            z.string().optional(),
+    kycRequired:        z.boolean().optional(),
+    kycDocuments:       z.array(z.string()).optional(),
   }).parse(req.body);
 
   const { rows } = await query(
     `UPDATE hotels SET
-       name                = COALESCE($2, name),
-       address             = COALESCE($3, address),
-       logo_url            = COALESCE($4, logo_url),
-       cover_photo_url     = COALESCE($5, cover_photo_url),
-       reception_phone     = COALESCE($6, reception_phone),
-       floor_plan_url      = COALESCE($7, floor_plan_url),
-       floor_plan_markers  = COALESCE($8, floor_plan_markers),
-       onboarding_complete = COALESCE($9, onboarding_complete)
+       name                = COALESCE($2,  name),
+       address             = COALESCE($3,  address),
+       logo_url            = COALESCE($4,  logo_url),
+       cover_photo_url     = COALESCE($5,  cover_photo_url),
+       reception_phone     = COALESCE($6,  reception_phone),
+       floor_plan_url      = COALESCE($7,  floor_plan_url),
+       floor_plan_markers  = COALESCE($8,  floor_plan_markers),
+       onboarding_complete = COALESCE($9,  onboarding_complete),
+       country             = COALESCE($10, country),
+       kyc_required        = COALESCE($11, kyc_required),
+       kyc_documents       = COALESCE($12, kyc_documents)
      WHERE id = $1 RETURNING *`,
     [
       req.user.hotelId,
-      body.name ?? null, body.address ?? null, body.logoUrl ?? null, body.coverPhotoUrl ?? null,
-      body.receptionPhone ?? null, body.floorPlanUrl ?? null,
+      body.name        ?? null,
+      body.address     ?? null,
+      body.logoUrl     ?? null,
+      body.coverPhotoUrl   ?? null,
+      body.receptionPhone  ?? null,
+      body.floorPlanUrl    ?? null,
       body.floorPlanMarkers !== undefined ? JSON.stringify(body.floorPlanMarkers) : null,
-      body.onboardingComplete ?? null
+      body.onboardingComplete ?? null,
+      body.country      ?? null,
+      body.kycRequired  ?? null,
+      body.kycDocuments !== undefined ? JSON.stringify(body.kycDocuments) : null,
     ]
   );
   cache.del(`settings:${req.user.hotelId}`);
