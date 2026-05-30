@@ -35,14 +35,14 @@ guestRouter.get("/find", asyncHandler(async (req, res) => {
   let result;
   if (email) {
     result = await query(
-      `SELECT q.token qr_token, b.id, g.name guest_name, b.status, q.revoked
+      `SELECT q.token qr_token, b.id, g.name guest_name, b.status, b.revoked
          FROM bookings b
          JOIN qr_codes q ON q.booking_id = b.id
          JOIN guests   g ON g.id         = b.guest_id
         WHERE b.hotel_id          = $1
           AND LOWER(g.email)      = LOWER($2)
           AND b.status NOT IN ('past', 'cancelled')
-          AND q.revoked           = false
+          AND b.revoked           = false
           AND b.check_out         > now()
         ORDER BY b.check_in ASC
         LIMIT 1`,
@@ -50,14 +50,14 @@ guestRouter.get("/find", asyncHandler(async (req, res) => {
     );
   } else if (reference) {
     result = await query(
-      `SELECT q.token qr_token, b.id, g.name guest_name, b.status, q.revoked
+      `SELECT q.token qr_token, b.id, g.name guest_name, b.status, b.revoked
          FROM bookings b
          JOIN qr_codes q ON q.booking_id = b.id
          JOIN guests   g ON g.id         = b.guest_id
         WHERE b.hotel_id          = $1
           AND UPPER(b.id::text)   LIKE UPPER($2)
           AND b.status NOT IN ('past', 'cancelled')
-          AND q.revoked           = false
+          AND b.revoked           = false
         ORDER BY b.check_in ASC
         LIMIT 1`,
       [hotel, `%${reference}%`]
