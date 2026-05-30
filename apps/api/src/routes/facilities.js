@@ -4,11 +4,16 @@ import { query } from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { ensureFacilityQr } from "../services/qr.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
+import { cache } from "../services/cache.js";
 
 export const facilitiesRouter = Router();
 facilitiesRouter.use(requireAuth);
 
 facilitiesRouter.get("/", asyncHandler(async (req, res) => {
+  const cacheKey = `facilities:${req.user.hotelId}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   const { rows } = await query(
     `SELECT f.id, f.hotel_id, f.name, f.description, f.zone, f.icon, f.photos, f.created_at,
             COALESCE(active.active_guest_count, 0) active_guest_count,
@@ -26,6 +31,7 @@ facilitiesRouter.get("/", asyncHandler(async (req, res) => {
       ORDER BY f.name`,
     [req.user.hotelId]
   );
+  cache.set(`facilities:${req.user.hotelId}`, rows);
   res.json(rows);
 }));
 
@@ -44,6 +50,7 @@ facilitiesRouter.post("/", asyncHandler(async (req, res) => {
   );
   // Auto-generate static QR for this facility
   const qr = await ensureFacilityQr({ hotelId: req.user.hotelId, facilityId: rows[0].id });
+  cache.del(`facilities:${req.user.hotelId}`);
   res.status(201).json({ ...rows[0], qr_token: qr?.token, qr_data_url: qr?.qr_data_url });
 }));
 
@@ -67,11 +74,13 @@ facilitiesRouter.put("/:id", asyncHandler(async (req, res) => {
      body.photos ? JSON.stringify(body.photos) : undefined]
   );
   if (!rows.length) throw new HttpError(404, "Facility not found");
+  cache.del(`facilities:${req.user.hotelId}`);
   res.json(rows[0]);
 }));
 
 facilitiesRouter.delete("/:id", asyncHandler(async (req, res) => {
   await query("DELETE FROM facilities WHERE id = $1 AND hotel_id = $2", [req.params.id, req.user.hotelId]);
+  cache.del(`facilities:${req.user.hotelId}`);
   res.status(204).end();
 }));
 

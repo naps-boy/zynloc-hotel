@@ -581,20 +581,22 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
 
 // ── ScanReceptionPage ─────────────────────────────────────────────────────────
 // Shown when Android native camera opens /reception-scan/:scanToken
-// Reads guest token from localStorage (saved when guest opened their booking link)
+// Reads guest token from sessionStorage (saved when guest opened their booking link).
+// sessionStorage (not localStorage) so each new device/session starts fresh and
+// Samsung's repeat-scan behaviour is scoped only to the current browser tab.
 
 function ScanReceptionPage({ scanToken }) {
   const [status,     setStatus]     = useState("loading"); // loading|waiting|checked-in|revoked|error|no-session
   const [errMsg,     setErrMsg]     = useState("");
   const [roomNumber, setRoomNumber] = useState("");
-  const guestToken  = localStorage.getItem("zynloc_guest_token");
-  const bookingId   = localStorage.getItem("zynloc_booking_id");
+  const guestToken  = sessionStorage.getItem("zynloc_guest_token");
+  const bookingId   = sessionStorage.getItem("zynloc_booking_id");
   const arrivedKey  = `zynloc_arrived_${scanToken}`;
 
   // Step 1 — notify reception via API (deduped per scanToken to prevent Samsung repeat-scan spam)
   useEffect(() => {
     if (!guestToken) { setStatus("no-session"); return; }
-    if (localStorage.getItem(arrivedKey)) { setStatus("waiting"); return; }
+    if (sessionStorage.getItem(arrivedKey)) { setStatus("waiting"); return; }
     fetch(`${API}/api/guest/${guestToken}/scan-reception`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -602,7 +604,7 @@ function ScanReceptionPage({ scanToken }) {
     }).then(async r => {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "Failed");
-      localStorage.setItem(arrivedKey, "1");
+      sessionStorage.setItem(arrivedKey, "1");
       setStatus("waiting"); // reception notified — now wait for live confirmation
     }).catch(err => { setStatus("error"); setErrMsg(err.message); });
   }, [scanToken]);
@@ -675,7 +677,7 @@ function ScanFacilityPage({ scanToken }) {
   const [status,  setStatus]  = useState("loading"); // loading|granted|denied|error|no-session
   const [result,  setResult]  = useState(null);
   const [errMsg,  setErrMsg]  = useState("");
-  const guestToken = localStorage.getItem("zynloc_guest_token");
+  const guestToken = sessionStorage.getItem("zynloc_guest_token");
 
   useEffect(() => {
     if (!guestToken) { setStatus("no-session"); return; }
@@ -3232,11 +3234,13 @@ function GuestApp({ token }) {
 
   // Persist guest token so ScanReceptionPage / ScanFacilityPage can identify
   // the guest when the Android native camera opens a scan-reception or
-  // scan-facility URL in a fresh browser tab.
+  // scan-facility URL in the same browser session.
+  // sessionStorage (not localStorage): each new guest session on the same
+  // shared device starts fresh — no cross-contamination between guests.
   useEffect(() => {
     if (token && payload?.booking?.id) {
-      localStorage.setItem("zynloc_guest_token", token);
-      localStorage.setItem("zynloc_booking_id",  payload.booking.id);
+      sessionStorage.setItem("zynloc_guest_token", token);
+      sessionStorage.setItem("zynloc_booking_id",  payload.booking.id);
     }
   }, [token, payload?.booking?.id]);
 

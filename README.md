@@ -46,6 +46,21 @@ curl -X POST http://localhost:4000/api/auth/register-manager \
   -d "{\"hotelName\":\"Zynloc Demo\",\"email\":\"manager@example.com\",\"password\":\"password123\"}"
 ```
 
+## Development Workflow
+
+- Feature development: work on `staging` branch
+- Test on: https://zynloc-hotel-staging.pages.dev
+- When confirmed working: merge `staging` to `main`
+- Production deploys automatically to: https://zynloc-hotel.pages.dev
+
+```bash
+# Deploy to staging
+bash scripts/deploy-staging.sh
+
+# Deploy to production (merges staging → main)
+bash scripts/deploy-production.sh
+```
+
 ## Deployment
 
 ### Cloudflare Pages Frontend

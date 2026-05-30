@@ -4,14 +4,21 @@ import { query } from "../db/pool.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { ensureCheckoutQr, ensureFacilityQr, ensureReceptionQr } from "../services/qr.js";
 import { asyncHandler } from "../utils/http.js";
+import { cache } from "../services/cache.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
 
 settingsRouter.get("/", asyncHandler(async (req, res) => {
+  const cacheKey = `settings:${req.user.hotelId}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   const hotel = (await query("SELECT * FROM hotels WHERE id = $1", [req.user.hotelId])).rows[0];
   const checkoutQr = await ensureCheckoutQr(req.user.hotelId);
-  res.json({ ...hotel, checkout_qr: checkoutQr });
+  const result = { ...hotel, checkout_qr: checkoutQr };
+  cache.set(cacheKey, result);
+  res.json(result);
 }));
 
 settingsRouter.put("/", requireRole("manager"), asyncHandler(async (req, res) => {
@@ -45,6 +52,7 @@ settingsRouter.put("/", requireRole("manager"), asyncHandler(async (req, res) =>
       body.onboardingComplete ?? null
     ]
   );
+  cache.del(`settings:${req.user.hotelId}`);
   res.json(rows[0]);
 }));
 

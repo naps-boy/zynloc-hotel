@@ -3,11 +3,16 @@ import { z } from "zod";
 import { query } from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
+import { cache } from "../services/cache.js";
 
 export const packagesRouter = Router();
 packagesRouter.use(requireAuth);
 
 packagesRouter.get("/", asyncHandler(async (req, res) => {
+  const cacheKey = `packages:${req.user.hotelId}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   const pkgs = (await query(
     "SELECT * FROM packages WHERE hotel_id = $1 ORDER BY name",
     [req.user.hotelId]
@@ -19,6 +24,7 @@ packagesRouter.get("/", asyncHandler(async (req, res) => {
     )).rows;
     pkg.facility_ids = fids.map(r => r.facility_id);
   }
+  cache.set(cacheKey, pkgs);
   res.json(pkgs);
 }));
 
@@ -42,6 +48,7 @@ packagesRouter.post("/", asyncHandler(async (req, res) => {
       [pkg.id, facilityId]
     );
   }
+  cache.del(`packages:${req.user.hotelId}`);
   res.status(201).json({ ...pkg, facility_ids: body.facilityIds });
 }));
 
@@ -72,10 +79,12 @@ packagesRouter.put("/:id", asyncHandler(async (req, res) => {
       );
     }
   }
+  cache.del(`packages:${req.user.hotelId}`);
   res.json({ ...rows[0], facility_ids: body.facilityIds ?? [] });
 }));
 
 packagesRouter.delete("/:id", asyncHandler(async (req, res) => {
   await query("DELETE FROM packages WHERE id = $1 AND hotel_id = $2", [req.params.id, req.user.hotelId]);
+  cache.del(`packages:${req.user.hotelId}`);
   res.status(204).end();
 }));

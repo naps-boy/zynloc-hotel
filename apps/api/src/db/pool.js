@@ -36,7 +36,14 @@ function createPool() {
     ssl = { rejectUnauthorized: false };
   }
 
-  return new pg.Pool({ connectionString: config.databaseUrl, ssl });
+  return new pg.Pool({
+    connectionString:     config.databaseUrl,
+    ssl,
+    max:                  20,
+    idleTimeoutMillis:    30000,
+    connectionTimeoutMillis: 2000,
+    allowExitOnIdle:      false,
+  });
 }
 
 export const pool = createPool();
