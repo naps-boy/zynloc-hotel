@@ -5,9 +5,12 @@ import { asyncHandler } from "../utils/http.js";
 export const adminRouter = Router();
 
 // ─── Admin key auth — NOT JWT, checked against ADMIN_SECRET env var ───────────
+// Falls back to the default key if ADMIN_SECRET env var is not set.
+const EFFECTIVE_ADMIN_SECRET = process.env.ADMIN_SECRET || "ZynlocAdmin2026!";
+
 function adminAuth(req, res, next) {
   const key = req.headers["x-admin-key"];
-  if (!key || key !== process.env.ADMIN_SECRET) {
+  if (!key || key !== EFFECTIVE_ADMIN_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
