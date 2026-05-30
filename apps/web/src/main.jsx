@@ -2655,7 +2655,7 @@ function NavEditor({ api, show }) {
         <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
           <div className="nav-plan-container"
             onClick={handleCanvasClick}
-            style={{ cursor: mode === "place" ? "crosshair" : "default", userSelect: "none" }}>
+            style={{ cursor: mode === "place" ? "crosshair" : mode === "connect" ? "pointer" : "default", userSelect: "none" }}>
             <img src={floor.image_data} alt={floor.floor_name} className="nav-plan-img" draggable={false} />
             <svg ref={svgRef} className="nav-plan-svg" viewBox="0 0 100 100" preserveAspectRatio="none"
               onMouseMove={onSvgMouseMove} onMouseUp={endDragCtrl} onMouseLeave={endDragCtrl}>
@@ -2670,8 +2670,8 @@ function NavEditor({ api, show }) {
                 const d          = buildBezierD(from, to, cps);
                 return (
                   <g key={p.id}>
-                    {/* Invisible wide hit area */}
-                    <path d={d} stroke="transparent" strokeWidth="4" fill="none" style={{ cursor: "pointer" }}
+                    {/* Invisible wide hit area — pointerEvents:"all" overrides the global pointer-events:none on .nav-plan-svg */}
+                    <path d={d} stroke="transparent" strokeWidth="4" fill="none" style={{ cursor: "pointer", pointerEvents: "all" }}
                       onClick={e => { e.stopPropagation(); setSelPathId(isSelected ? null : p.id); setSelWpId(null); setPending(null); }} />
                     {/* Visible curve */}
                     <path d={d} fill="none"
@@ -2690,13 +2690,13 @@ function NavEditor({ api, show }) {
                 );
               })}
 
-              {/* Waypoints */}
+              {/* Waypoints — pointerEvents:"all" overrides the inherited pointer-events:none from .nav-plan-svg */}
               {floorWps.map(wp => {
                 const color      = WP_COLORS[wp.waypoint_type] || "#d8a84f";
                 const isSelected = selWpId === wp.id;
                 const isFirst    = connFirst === wp.id;
                 return (
-                  <g key={wp.id} className="wp-dot" style={{ cursor: "pointer" }}
+                  <g key={wp.id} className="wp-dot" style={{ cursor: "pointer", pointerEvents: "all" }}
                     onClick={e => handleWpClick(e, wp)}>
                     {wp.is_entrance && (
                       <circle cx={wp.x_percent} cy={wp.y_percent} r="4.5"
