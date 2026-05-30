@@ -899,8 +899,20 @@ function ManagerRoot({ api }) {
 
 function Onboarding({ api, onComplete }) {
   const [step, setStep] = useState(0);
+  const [skipping, setSkipping] = useState(false);
   const { toast, show } = useToast();
   const STEPS = ["Brand", "Rooms", "Facilities", "Packages", "QR Codes"];
+
+  async function skipToDashboard() {
+    setSkipping(true);
+    try {
+      await api.request("/api/settings", { method: "PUT", body: JSON.stringify({ onboardingComplete: true }) });
+      onComplete();
+    } catch (err) {
+      show(err.message, "error");
+      setSkipping(false);
+    }
+  }
 
   return (
     <main className="onboarding-shell">
@@ -918,6 +930,17 @@ function Onboarding({ api, onComplete }) {
         {step === 2 && <OnboardFacilities api={api} onNext={() => setStep(3)} show={show} />}
         {step === 3 && <OnboardPackages api={api} onNext={() => setStep(4)} show={show} />}
         {step === 4 && <OnboardQrCodes api={api} onComplete={onComplete} show={show} />}
+
+        <div style={{ borderTop: "1px solid var(--border)", marginTop: 24, paddingTop: 16, textAlign: "center" }}>
+          <button
+            className="ghost sm"
+            style={{ color: "var(--muted)", fontSize: 13 }}
+            onClick={skipToDashboard}
+            disabled={skipping}
+          >
+            {skipping ? "Going to dashboard…" : "Already set up? Go to dashboard →"}
+          </button>
+        </div>
       </div>
       <Toast toast={toast} />
     </main>
