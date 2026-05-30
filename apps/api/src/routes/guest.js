@@ -38,15 +38,19 @@ guestRouter.get("/:token", requireValidQr, asyncHandler(async (req, res) => {
     [req.qr.booking_id, req.qr.hotel_id]
   );
 
-  // Get navigation waypoints for this hotel
-  const waypoints = await query(
-    "SELECT * FROM navigation_waypoints WHERE hotel_id = $1 ORDER BY name",
+  // Navigation data (v2 schema)
+  const { rows: floorPlans } = await query(
+    "SELECT * FROM floor_plans WHERE hotel_id = $1 ORDER BY floor_number",
     [req.qr.hotel_id]
-  );
-  const connections = await query(
-    "SELECT * FROM navigation_connections WHERE hotel_id = $1",
+  ).catch(() => ({ rows: [] }));
+  const { rows: navWaypoints } = await query(
+    "SELECT * FROM nav_waypoints WHERE hotel_id = $1 ORDER BY name",
     [req.qr.hotel_id]
-  );
+  ).catch(() => ({ rows: [] }));
+  const { rows: navPaths } = await query(
+    "SELECT * FROM nav_paths WHERE hotel_id = $1",
+    [req.qr.hotel_id]
+  ).catch(() => ({ rows: [] }));
 
   // Messages for this guest
   const messages = await query(
@@ -57,19 +61,13 @@ guestRouter.get("/:token", requireValidQr, asyncHandler(async (req, res) => {
     [req.qr.hotel_id, req.qr.guest_id]
   );
 
-  // Floor plan (if hotel has one set up)
-  const floorPlanResult = await query(
-    "SELECT * FROM floor_plans WHERE hotel_id = $1 LIMIT 1",
-    [req.qr.hotel_id]
-  );
-
   res.json({
     booking: req.qr,
     facilities: access.rows,
-    waypoints: waypoints.rows,
-    connections: connections.rows,
+    floorPlans,
+    waypoints: navWaypoints,
+    paths: navPaths,
     messages: messages.rows,
-    floorPlan: floorPlanResult.rows[0] || null,
   });
 }));
 
