@@ -79,14 +79,15 @@ export async function ensureReceptionQr(hotelId) {
   const expired = !hotel?.reception_token || new Date(hotel.reception_token_expires_at) < new Date();
 
   if (!expired) {
-    const url = `${config.clientUrl}/reception-scan/${hotel.reception_token}`;
+    // Include hotel ID so /reception-scan page can identify the guest without sessionStorage
+    const url = `${config.clientUrl}/reception-scan/${hotel.reception_token}?hotel=${hotelId}`;
     const qrDataUrl = await QRCode.toDataURL(url, QR_OPTS);
     return { token: hotel.reception_token, expires_at: hotel.reception_token_expires_at, qr_data_url: qrDataUrl };
   }
 
   const token = crypto.randomBytes(24).toString("base64url");
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
-  const url = `${config.clientUrl}/reception-scan/${token}`;
+  const url = `${config.clientUrl}/reception-scan/${token}?hotel=${hotelId}`;
   const qrDataUrl = await QRCode.toDataURL(url, QR_OPTS);
   await query(
     "UPDATE hotels SET reception_token = $1, reception_token_expires_at = $2 WHERE id = $3",

@@ -580,66 +580,175 @@ function QrScanner({ onScan, onClose, bookings = [] }) {
 }
 
 // ── ScanReceptionPage ─────────────────────────────────────────────────────────
-// Shown when Android native camera opens /reception-scan/:scanToken
-// Reads guest token from sessionStorage (saved when guest opened their booking link).
-// sessionStorage (not localStorage) so each new device/session starts fresh and
-// Samsung's repeat-scan behaviour is scoped only to the current browser tab.
+// Shown when Android native camera opens /reception-scan/:scanToken?hotel=HOTEL_ID
+//
+// Flow A (guest has sessionStorage token from booking tab):
+//   Immediately calls scan-reception, shows waiting screen.
+// Flow B (Samsung opened in new tab — sessionStorage empty):
+//   Shows identification form; guest enters email / booking reference.
+//   Calls /api/guest/find to resolve their token, then proceeds as Flow A.
 
-function ScanReceptionPage({ scanToken }) {
-  const [status,     setStatus]     = useState("loading"); // loading|waiting|checked-in|revoked|error|no-session
+function ScanReceptionPage({ scanToken, hotelId }) {
+  // Resolved guest token — may come from sessionStorage OR from the find form
+  const [resolvedToken, setResolvedToken] = useState(
+    () => sessionStorage.getItem("zynloc_guest_token") || null
+  );
+  const [resolvedBookingId, setResolvedBookingId] = useState(
+    () => sessionStorage.getItem("zynloc_booking_id") || null
+  );
+  const [status,     setStatus]     = useState("loading"); // loading|identify|notifying|waiting|checked-in|revoked|error
   const [errMsg,     setErrMsg]     = useState("");
   const [roomNumber, setRoomNumber] = useState("");
-  const guestToken  = sessionStorage.getItem("zynloc_guest_token");
-  const bookingId   = sessionStorage.getItem("zynloc_booking_id");
-  const arrivedKey  = `zynloc_arrived_${scanToken}`;
 
-  // Step 1 — notify reception via API (deduped per scanToken to prevent Samsung repeat-scan spam)
+  // Identification form state (used only when no sessionStorage token)
+  const [idEmail,     setIdEmail]     = useState("");
+  const [idReference, setIdReference] = useState("");
+  const [finding,     setFinding]     = useState(false);
+  const [findErr,     setFindErr]     = useState("");
+
+  const arrivedKey = `zynloc_arrived_${scanToken}`;
+
+  // ── Step 1: decide initial state ─────────────────────────────────────────────
   useEffect(() => {
-    if (!guestToken) { setStatus("no-session"); return; }
-    if (sessionStorage.getItem(arrivedKey)) { setStatus("waiting"); return; }
-    fetch(`${API}/api/guest/${guestToken}/scan-reception`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ receptionToken: scanToken })
-    }).then(async r => {
+    if (!resolvedToken) {
+      // No session — show identification form
+      setStatus("identify");
+    } else if (sessionStorage.getItem(arrivedKey)) {
+      setStatus("waiting"); // already notified this reception token — dedupe
+    } else {
+      notifyReception(resolvedToken);
+    }
+  }, []); // run once on mount
+
+  // ── Notify reception ──────────────────────────────────────────────────────────
+  async function notifyReception(guestToken) {
+    setStatus("notifying");
+    try {
+      const r = await fetch(`${API}/api/guest/${guestToken}/scan-reception`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receptionToken: scanToken }),
+      });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || "Failed");
+      if (!r.ok) throw new Error(j.error || "Failed to notify reception");
       sessionStorage.setItem(arrivedKey, "1");
-      setStatus("waiting"); // reception notified — now wait for live confirmation
-    }).catch(err => { setStatus("error"); setErrMsg(err.message); });
-  }, [scanToken]);
+      setStatus("waiting");
+    } catch (err) {
+      setStatus("error");
+      setErrMsg(err.message);
+    }
+  }
 
-  // Step 2 — Socket.IO: update instantly when manager confirms check-in
+  // ── Identification form submit ────────────────────────────────────────────────
+  async function handleFindBooking(e) {
+    e.preventDefault();
+    if (!idEmail.trim() && !idReference.trim()) {
+      setFindErr("Please enter your email address or booking reference.");
+      return;
+    }
+    if (!hotelId) {
+      setFindErr("Hotel information missing. Please scan the QR code again.");
+      return;
+    }
+    setFinding(true);
+    setFindErr("");
+    try {
+      const params = new URLSearchParams({ hotel: hotelId });
+      if (idEmail.trim())     params.set("email",     idEmail.trim());
+      if (idReference.trim()) params.set("reference", idReference.trim());
+      const r = await fetch(`${API}/api/guest/find?${params}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "Booking not found");
+      // Store token so the rest of the flow works
+      sessionStorage.setItem("zynloc_guest_token", j.token);
+      sessionStorage.setItem("zynloc_booking_id",  j.booking_id);
+      setResolvedToken(j.token);
+      setResolvedBookingId(j.booking_id);
+      // Proceed to notify reception
+      await notifyReception(j.token);
+    } catch (err) {
+      setFindErr(err.message);
+    }
+    setFinding(false);
+  }
+
+  // ── Step 2: Socket.IO — update when manager confirms ─────────────────────────
   useEffect(() => {
-    if (!bookingId || !guestToken) return;
+    if (!resolvedBookingId || !resolvedToken) return;
     const socket = io(API, { reconnection: true });
-    socket.emit("guest:join", bookingId);
-    socket.on("connect",          () => socket.emit("guest:join", bookingId)); // re-join on reconnect
+    socket.emit("guest:join", resolvedBookingId);
+    socket.on("connect",           () => socket.emit("guest:join", resolvedBookingId));
     socket.on("checkin:confirmed", ({ roomNumber: rn }) => { setRoomNumber(rn || ""); setStatus("checked-in"); });
     socket.on("access:revoked",    () => setStatus("revoked"));
     return () => socket.disconnect();
-  }, [bookingId]);
+  }, [resolvedBookingId]);
 
+  // ── Shared layout helpers ─────────────────────────────────────────────────────
   const S = { minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center",
               justifyContent: "center", padding: 32, flexDirection: "column", gap: 16 };
-  const C = { textAlign: "center", maxWidth: 340, display: "flex", flexDirection: "column",
-              gap: 12, alignItems: "center" };
+  const C = { textAlign: "center", maxWidth: 360, display: "flex", flexDirection: "column",
+              gap: 14, alignItems: "center", width: "100%" };
 
-  if (status === "loading")    return <main style={S}><p className="muted">Notifying reception…</p></main>;
-  if (status === "no-session") return (
-    <main style={S}><div style={C}>
-      <p style={{ fontSize: 48 }}>🔑</p>
-      <h2 style={{ color: "var(--gold)" }}>Open Your Guest Link First</h2>
-      <p className="muted">Open your booking email link first, then scan the reception QR again.</p>
-    </div></main>
+  // ── Identify screen — Samsung opened new tab without session ──────────────────
+  if (status === "identify") return (
+    <main style={S}>
+      <div style={{ ...C, alignItems: "stretch" }}>
+        <div style={{ textAlign: "center", marginBottom: 8 }}>
+          <p style={{ fontSize: 48, margin: 0 }}>🏨</p>
+          <h2 style={{ color: "var(--gold)", marginTop: 8 }}>Welcome!</h2>
+          <p className="muted" style={{ fontSize: 14 }}>
+            Please identify yourself to complete check-in.
+          </p>
+        </div>
+        <form className="stack" onSubmit={handleFindBooking}>
+          <input
+            type="email"
+            placeholder="Your email address"
+            value={idEmail}
+            onChange={e => { setIdEmail(e.target.value); setFindErr(""); }}
+            autoComplete="email"
+            autoFocus
+          />
+          <div style={{ textAlign: "center", color: "var(--muted)", fontSize: 13 }}>or</div>
+          <input
+            placeholder="Booking reference (optional)"
+            value={idReference}
+            onChange={e => { setIdReference(e.target.value); setFindErr(""); }}
+            autoComplete="off"
+          />
+          {findErr && <p className="error" style={{ fontSize: 13 }}>{findErr}</p>}
+          <button className="primary" type="submit" disabled={finding}>
+            {finding
+              ? <><span style={{ width: 16, height: 16, borderRadius: "50%", border: "2px solid rgba(255,255,255,.3)",
+                                 borderTopColor: "#fff", animation: "spin .8s linear infinite",
+                                 display: "inline-block", marginRight: 8 }} /></>
+              : <><Check size={16} />Find my booking</>}
+          </button>
+        </form>
+        <p className="muted" style={{ fontSize: 12, textAlign: "center" }}>
+          Your booking email is the one you used when making the reservation.
+        </p>
+      </div>
+    </main>
   );
+
+  if (status === "loading" || status === "notifying") return (
+    <main style={S}><p className="muted">Notifying reception…</p></main>
+  );
+
   if (status === "error") return (
     <main style={S}><div style={C}>
       <p style={{ fontSize: 48 }}>❌</p>
       <p className="error">{errMsg}</p>
-      {guestToken && <a className="secondary" href={`/guest/${guestToken}`} style={{ textDecoration: "none" }}>Back</a>}
+      <button className="ghost" onClick={() => setStatus("identify")}>Try again</button>
+      {resolvedToken && (
+        <a className="secondary" href={`/guest/${resolvedToken}`} style={{ textDecoration: "none" }}>
+          Go to my booking
+        </a>
+      )}
     </div></main>
   );
+
   if (status === "revoked") return (
     <main style={S}><div style={C}>
       <p style={{ fontSize: 48 }}>⛔</p>
@@ -647,17 +756,21 @@ function ScanReceptionPage({ scanToken }) {
       <p className="muted">Please contact the front desk for assistance.</p>
     </div></main>
   );
+
   if (status === "checked-in") return (
-    <main style={{ ...S, background: "var(--bg)" }}><div style={C}>
+    <main style={S}><div style={C}>
       <p style={{ fontSize: 80 }}>🎉</p>
       <h2 style={{ color: "var(--green)", fontSize: 28, fontWeight: 800 }}>You Are Checked In!</h2>
       {roomNumber && <p style={{ fontSize: 22, color: "var(--gold)", fontWeight: 700 }}>Room {roomNumber}</p>}
       <p className="muted">Welcome! Your room is ready.</p>
-      <a className="primary" href={`/guest/${guestToken}`} style={{ textDecoration: "none", marginTop: 8 }}>
-        Go to My Room →
-      </a>
+      {resolvedToken && (
+        <a className="primary" href={`/guest/${resolvedToken}`} style={{ textDecoration: "none", marginTop: 8 }}>
+          Go to My Room →
+        </a>
+      )}
     </div></main>
   );
+
   // waiting
   return (
     <main style={S}><div style={C}>
@@ -738,6 +851,237 @@ function ScanFacilityPage({ scanToken }) {
   );
 }
 
+// ── AdminDashboard ────────────────────────────────────────────────────────────
+// Accessible at /admin — protected by admin key, invisible to hotels.
+
+const ADMIN_KEY = "ZynlocAdmin2026!";
+
+function AdminDashboard() {
+  const [adminKey,    setAdminKey]    = useState(() => sessionStorage.getItem("zynloc_admin_key") || "");
+  const [keyInput,    setKeyInput]    = useState("");
+  const [overview,    setOverview]    = useState(null);
+  const [hotels,      setHotels]      = useState([]);
+  const [activity,    setActivity]    = useState([]);
+  const [guests,      setGuests]      = useState([]);
+  const [health,      setHealth]      = useState(null);
+  const [hotelSearch, setHotelSearch] = useState("");
+  const [loading,     setLoading]     = useState(false);
+  const [loadErr,     setLoadErr]     = useState("");
+
+  async function adminReq(path) {
+    const r = await fetch(`${API}${path}`, { headers: { "X-Admin-Key": adminKey } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  async function loadAll() {
+    setLoading(true); setLoadErr("");
+    try {
+      const [ov, hs, act, gs, hlt] = await Promise.all([
+        adminReq("/api/admin/overview"),
+        adminReq("/api/admin/hotels"),
+        adminReq("/api/admin/activity"),
+        adminReq("/api/admin/guests"),
+        fetch(`${API}/health`).then(r => r.json()).catch(() => null),
+      ]);
+      setOverview(ov); setHotels(hs); setActivity(act); setGuests(gs); setHealth(hlt);
+    } catch (err) {
+      setLoadErr(err.message);
+      if (err.message.includes("401")) {
+        sessionStorage.removeItem("zynloc_admin_key"); setAdminKey("");
+      }
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => { if (adminKey) loadAll(); }, [adminKey]);
+
+  function login() {
+    if (keyInput === ADMIN_KEY) {
+      sessionStorage.setItem("zynloc_admin_key", keyInput);
+      setAdminKey(keyInput);
+    } else {
+      alert("Wrong admin key");
+    }
+  }
+
+  // ── Login screen ─────────────────────────────────────────────────────────────
+  if (!adminKey) return (
+    <main style={{ minHeight: "100vh", background: "var(--bg)", display: "flex",
+                   alignItems: "center", justifyContent: "center", padding: 32 }}>
+      <div className="panel stack" style={{ maxWidth: 360, width: "100%", padding: 32 }}>
+        <div className="brand-lockup"><Hotel size={26} /><span>Zynloc Admin</span></div>
+        <h2 style={{ margin: 0 }}>Admin Access</h2>
+        <p className="muted" style={{ fontSize: 13 }}>This page is for Zynloc founders only.</p>
+        <input type="password" placeholder="Admin key" autoFocus
+          value={keyInput} onChange={e => setKeyInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && login()} />
+        <button className="primary" onClick={login}><Check size={16} />Enter</button>
+      </div>
+    </main>
+  );
+
+  const filteredHotels = hotels.filter(h =>
+    !hotelSearch || h.name?.toLowerCase().includes(hotelSearch.toLowerCase())
+  );
+
+  const S = { minHeight: "100vh", background: "var(--bg)", padding: "24px 20px", maxWidth: 1200, margin: "0 auto" };
+
+  return (
+    <div style={S}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ margin: 0, color: "var(--gold)", fontSize: 24 }}>Zynloc Admin</h1>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>Platform monitoring dashboard</p>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {health && (
+            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%",
+                             background: health.ok ? "#26c281" : "#ef4444" }} />
+              {health.db === "connected" ? "DB connected" : "DB error"}
+              {" · "}Uptime {Math.floor((health.uptime || 0) / 60)}m
+            </span>
+          )}
+          <button className="ghost sm" onClick={loadAll} disabled={loading}>
+            {loading ? "Loading…" : "Refresh"}
+          </button>
+          <button className="ghost sm" onClick={() => { sessionStorage.removeItem("zynloc_admin_key"); setAdminKey(""); }}>
+            <LogOut size={14} />Logout
+          </button>
+        </div>
+      </div>
+
+      {loadErr && <p className="error">{loadErr}</p>}
+
+      {/* Overview cards */}
+      {overview && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
+          {[
+            ["Hotels",        overview.total_hotels],
+            ["Guests",        overview.total_guests],
+            ["Bookings",      overview.total_bookings],
+            ["Active now",    overview.active_bookings],
+            ["Check-ins today", overview.checkins_today],
+            ["New this week", overview.new_hotels_this_week],
+            ["New this month",overview.new_hotels_this_month],
+            ["Messages",      overview.total_messages],
+          ].map(([label, val]) => (
+            <div key={label} className="panel" style={{ padding: "16px 20px", textAlign: "center" }}>
+              <div style={{ fontSize: 28, fontWeight: 800, color: "var(--gold)" }}>{val ?? "—"}</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Activity chart */}
+      {activity.length > 0 && (
+        <div className="panel stack" style={{ marginBottom: 24 }}>
+          <h3 style={{ margin: 0 }}>Activity — last 30 days</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={activity} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.05)" />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: "var(--muted)" }}
+                tickFormatter={d => d?.slice(5)} />
+              <YAxis tick={{ fontSize: 11, fill: "var(--muted)" }} />
+              <Tooltip
+                contentStyle={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8 }}
+                labelStyle={{ color: "var(--gold)" }} />
+              <Area type="monotone" dataKey="new_bookings" stroke="#d8a84f" fill="rgba(216,168,79,.15)"
+                strokeWidth={2} name="New bookings" />
+              <Area type="monotone" dataKey="checkins" stroke="#26c281" fill="rgba(38,194,129,.1)"
+                strokeWidth={2} name="Check-ins" />
+              <Area type="monotone" dataKey="messages_sent" stroke="#5b9cf6" fill="rgba(91,156,246,.1)"
+                strokeWidth={1.5} name="Messages" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Hotels table */}
+      <div className="panel stack" style={{ marginBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0 }}>Registered hotels ({filteredHotels.length})</h3>
+          <input placeholder="Search hotels…" value={hotelSearch}
+            onChange={e => setHotelSearch(e.target.value)}
+            style={{ maxWidth: 200 }} />
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--muted)" }}>
+                {["Hotel","Country","Rooms","Bookings","Active","KYC","Joined","Last activity"].map(h => (
+                  <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredHotels.map(h => (
+                <tr key={h.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "8px 12px", fontWeight: 600 }}>{h.name}</td>
+                  <td style={{ padding: "8px 12px", color: "var(--muted)" }}>{h.country || "—"}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>{h.room_count}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>{h.booking_count}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "center", color: "#26c281" }}>{h.active_guest_count}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    {h.kyc_required ? <span style={{ color: "#26c281" }}>✓</span> : <span style={{ color: "var(--muted)" }}>—</span>}
+                  </td>
+                  <td style={{ padding: "8px 12px", color: "var(--muted)", whiteSpace: "nowrap" }}>
+                    {h.created_at ? new Date(h.created_at).toLocaleDateString() : "—"}
+                  </td>
+                  <td style={{ padding: "8px 12px", color: "var(--muted)", whiteSpace: "nowrap" }}>
+                    {h.last_activity ? new Date(h.last_activity).toLocaleDateString() : "—"}
+                  </td>
+                </tr>
+              ))}
+              {!filteredHotels.length && (
+                <tr><td colSpan={8} style={{ padding: "20px 12px", textAlign: "center", color: "var(--muted)" }}>No hotels</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Recent guests */}
+      <div className="panel stack">
+        <h3 style={{ margin: 0 }}>Recent guests (last 50)</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--muted)" }}>
+                {["Guest","Hotel","Check-in","Check-out","Status","Created"].map(h => (
+                  <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {guests.map((g, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "8px 12px", fontWeight: 600 }}>{g.guest_name}</td>
+                  <td style={{ padding: "8px 12px", color: "var(--muted)" }}>{g.hotel_name}</td>
+                  <td style={{ padding: "8px 12px" }}>{g.check_in ? new Date(g.check_in).toLocaleDateString() : "—"}</td>
+                  <td style={{ padding: "8px 12px" }}>{g.check_out ? new Date(g.check_out).toLocaleDateString() : "—"}</td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <span className={`pill ${g.status}`}>{g.status}</span>
+                  </td>
+                  <td style={{ padding: "8px 12px", color: "var(--muted)" }}>
+                    {g.created_at ? new Date(g.created_at).toLocaleDateString() : "—"}
+                  </td>
+                </tr>
+              ))}
+              {!guests.length && (
+                <tr><td colSpan={6} style={{ padding: "20px 12px", textAlign: "center", color: "var(--muted)" }}>No guests</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -745,8 +1089,10 @@ function App() {
   const parts  = window.location.pathname.split("/").filter(Boolean);
   const params = new URLSearchParams(window.location.search);
 
+  if (parts[0] === "admin")          return <AdminDashboard />;
   if (parts[0] === "guest"           && parts[1]) return <GuestApp token={parts[1]} />;
-  if (parts[0] === "reception-scan"  && parts[1]) return <ScanReceptionPage scanToken={parts[1]} />;
+  if (parts[0] === "reception-scan"  && parts[1])
+    return <ScanReceptionPage scanToken={parts[1]} hotelId={params.get("hotel")} />;
   if (parts[0] === "facility-scan"   && parts[1]) return <ScanFacilityPage  scanToken={parts[1]} />;
   if (parts[0] === "reset-password"  && params.get("token")) {
     return <ResetPassword resetToken={params.get("token")} />;
@@ -3697,7 +4043,11 @@ function GuestHome({ booking, gReq, show, lang, setLang }) {
 
   async function handleReceptionScan(qrData) {
     setScanningReception(false);
-    const token = qrData.includes("/reception-scan/") ? qrData.split("/reception-scan/").pop() : qrData;
+    // Extract just the token segment — strip any ?hotel=... query param
+    let rawToken = qrData.includes("/reception-scan/")
+      ? qrData.split("/reception-scan/")[1]
+      : qrData;
+    const token = rawToken?.split("?")[0] || rawToken;
     try {
       await gReq("/scan-reception", { method: "POST", body: { receptionToken: token } });
       setWaitingConfirm(true);

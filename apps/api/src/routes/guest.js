@@ -25,6 +25,57 @@ async function requireValidQr(req, _res, next) {
   } catch (err) { next(err); }
 }
 
+// ─── GET /api/guest/find — find booking by email or reference ────────────────
+// PUBLIC — no auth. Used by ScanReceptionPage when guest has no sessionStorage token.
+// Must be placed BEFORE /:token to avoid Express matching "find" as a token.
+guestRouter.get("/find", asyncHandler(async (req, res) => {
+  const { email, reference, hotel } = req.query;
+  if (!hotel) return res.status(400).json({ error: "Hotel ID required" });
+
+  let result;
+  if (email) {
+    result = await query(
+      `SELECT q.token qr_token, b.id, g.name guest_name, b.status, q.revoked
+         FROM bookings b
+         JOIN qr_codes q ON q.booking_id = b.id
+         JOIN guests   g ON g.id         = b.guest_id
+        WHERE b.hotel_id          = $1
+          AND LOWER(g.email)      = LOWER($2)
+          AND b.status NOT IN ('past', 'cancelled')
+          AND q.revoked           = false
+          AND b.check_out         > now()
+        ORDER BY b.check_in ASC
+        LIMIT 1`,
+      [hotel, email]
+    );
+  } else if (reference) {
+    result = await query(
+      `SELECT q.token qr_token, b.id, g.name guest_name, b.status, q.revoked
+         FROM bookings b
+         JOIN qr_codes q ON q.booking_id = b.id
+         JOIN guests   g ON g.id         = b.guest_id
+        WHERE b.hotel_id          = $1
+          AND UPPER(b.id::text)   LIKE UPPER($2)
+          AND b.status NOT IN ('past', 'cancelled')
+          AND q.revoked           = false
+        ORDER BY b.check_in ASC
+        LIMIT 1`,
+      [hotel, `%${reference}%`]
+    );
+  } else {
+    return res.status(400).json({ error: "Email or booking reference required" });
+  }
+
+  if (!result.rows.length) {
+    return res.status(404).json({
+      error: "No active booking found. Please check your email address or contact reception.",
+    });
+  }
+
+  const b = result.rows[0];
+  res.json({ ok: true, token: b.qr_token, guest_name: b.guest_name, booking_id: b.id });
+}));
+
 // ─── GET /api/guest/:token — load booking + facilities ────────────────────────
 guestRouter.get("/:token", requireValidQr, asyncHandler(async (req, res) => {
   const access = await query(

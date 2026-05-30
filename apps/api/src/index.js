@@ -6,7 +6,6 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import { config } from "./config.js";
 import { authRouter }            from "./routes/auth.js";
@@ -27,6 +26,7 @@ import { serviceRequestsRouter } from "./routes/service-requests.js";
 import { accessLogRouter }       from "./routes/access-log.js";
 import { smtpRouter }            from "./routes/smtp.js";
 import { alertsRouter }          from "./routes/alerts.js";
+import { adminRouter }           from "./routes/admin.js";
 import { attachRealtime }        from "./services/realtime.js";
 import { startLateCheckoutMonitor } from "./jobs/lateCheckout.js";
 import { runMigrations }         from "./db/runMigrations.js";
@@ -39,7 +39,11 @@ const server = http.createServer(app);
 // CORS — CLIENT_URL may be comma-separated (localhost + ngrok URL)
 const allowedOrigins = cfg.clientUrl.split(",").map((s) => s.trim());
 const originOption   = allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins;
-const corsOptions    = { origin: originOption, credentials: true };
+const corsOptions    = {
+  origin: originOption,
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization", "X-Admin-Key"],
+};
 
 const io = new Server(server, { cors: corsOptions });
 attachRealtime(io);
@@ -49,27 +53,6 @@ app.use(cors(corsOptions));
 app.use(compression());
 app.use(morgan("dev"));
 app.use(express.json({ limit: "10mb" }));  // raised for base64 selfie uploads
-
-// ── Rate limiting ─────────────────────────────────────────────────────────────
-// Auth endpoints: 20 attempts per 15 min (brute-force protection)
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { error: "Too many login attempts, please try again later" },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use("/api/auth/", authLimiter);
-
-// General API: 500 req per 15 min per IP (handles ~10k concurrent light users)
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 500,
-  message: { error: "Too many requests, please try again later" },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use("/api/", apiLimiter);
 
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get("/health", async (_req, res) => {
@@ -100,6 +83,7 @@ app.use("/api/service-requests", serviceRequestsRouter);
 app.use("/api/access-log",       accessLogRouter);
 app.use("/api/smtp",             smtpRouter);
 app.use("/api/alerts",           alertsRouter);
+app.use("/api/admin",            adminRouter);
 
 // ── Global error handler ──────────────────────────────────────────────────────
 app.use((err, _req, res, _next) => {
