@@ -3878,15 +3878,17 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
   const [selfie,       setSelfie]       = useState(null);
   const [saving,       setSaving]       = useState(false);
   const [hotelKyc,     setHotelKyc]     = useState({ kyc_required: false, kyc_documents: [], hotel_name: "" });
+  const [kycLoading,   setKycLoading]   = useState(true);   // true until hotel-kyc fetch resolves
   const [kycChoice,    setKycChoice]    = useState(null);   // null | "now" | "later"
   const [uploadedDocs, setUploadedDocs] = useState({});
 
   // Fetch hotel KYC settings (no auth needed — public endpoint)
   useEffect(() => {
+    setKycLoading(true);
     fetch(`${API}/api/guest/${token}/hotel-kyc`)
       .then(r => r.json())
-      .then(data => setHotelKyc(data))
-      .catch(() => {});
+      .then(data => { setHotelKyc(data); setKycLoading(false); })
+      .catch(() => setKycLoading(false));
   }, [token]);
 
   async function submit(e) {
@@ -3938,7 +3940,13 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
           <SelfieCapture onCapture={setSelfie} label={t(lang, "takeSelfie")} hint={t(lang, "selfieHint")} />
 
           {/* ── KYC document upload ───────────────────────────────────── */}
-          {selfie && kycDocsDue && (
+          {kycLoading ? (
+            <div className="kyc-upload-section">
+              <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+                Loading document requirements…
+              </p>
+            </div>
+          ) : hotelKyc.kyc_required ? (
             <div className="kyc-upload-section">
               <div className="kyc-notice">
                 <p style={{ margin: 0 }}>
@@ -3995,10 +4003,10 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
                 </div>
               )}
             </div>
-          )}
+          ) : null}
 
-          {/* Show confirm button once selfie is captured and KYC choice is resolved */}
-          {selfie && !saving && (kycChoice !== null || !kycDocsDue) && (
+          {/* Show confirm button once selfie is captured, KYC loaded, and choice resolved */}
+          {selfie && !saving && !kycLoading && (kycChoice !== null || !kycDocsDue) && (
             <button className="primary" type="submit"
               disabled={kycChoice === "now" && kycDocsDue && !allUploaded}>
               <Check size={18} />
