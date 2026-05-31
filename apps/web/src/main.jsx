@@ -55,6 +55,16 @@ function useToast() {
 
 function fmtDate(v) { return v ? new Date(v).toLocaleDateString() : "—"; }
 function fmtTime(v) { return v ? new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"; }
+function formatMessageTime(ts) {
+  if (!ts) return "—";
+  const date = new Date(ts);
+  const now  = new Date();
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (date.toDateString() === now.toDateString()) return `Today ${time}`;
+  const yesterday = new Date(now - 86400000);
+  if (date.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+}
 function cap(s) { return s ? String(s).replace(/[-_](\w)/g, (_, c) => " " + c.toUpperCase()).replace(/^\w/, c => c.toUpperCase()) : ""; }
 
 // ── shared ────────────────────────────────────────────────────────────────────
@@ -2629,7 +2639,7 @@ function MgrMessages({ api, data, reload }) {
                   <p className="chat-thread-preview">{preview}</p>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
-                  <span className="chat-thread-time">{fmtTime(lastMsg?.created_at)}</span>
+                  <span className="chat-thread-time">{formatMessageTime(lastMsg?.created_at)}</span>
                   {unread > 0 && <span className="nav-badge" style={{ fontSize: 10 }}>{unread}</span>}
                 </div>
               </div>
@@ -2668,7 +2678,7 @@ function MgrMessages({ api, data, reload }) {
                       <div className={`chat-msg-bubble ${isOutgoing ? "outgoing" : "incoming"}`}>
                         {m.body}
                       </div>
-                      <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
+                      <span className="chat-msg-time">{formatMessageTime(m.created_at)}</span>
                     </div>
                   );
                 })}
@@ -4422,7 +4432,7 @@ function GuestMessages({ messages, gReq, reload, show, lang, booking }) {
               <div className={`guest-chat-bubble ${isGuest ? "outgoing" : "incoming"} ${m.broadcast ? "broadcast" : ""}`}>
                 {m.body}
               </div>
-              <span className="guest-chat-time">{fmtTime(m.created_at)}</span>
+              <span className="guest-chat-time">{formatMessageTime(m.created_at)}</span>
             </div>
           );
         })}
