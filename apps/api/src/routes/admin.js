@@ -122,7 +122,7 @@ adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   res.json(rows);
 }));
 
-// ─── GET /api/admin/protect-accounts — TEMP: find top 4 active hotels ─────────
+// ─── GET /api/admin/protect-accounts/discover — TEMP: find top 4 active hotels
 adminRouter.get("/protect-accounts/discover", asyncHandler(async (_req, res) => {
   const { rows } = await query(`
     SELECT
@@ -138,7 +138,7 @@ adminRouter.get("/protect-accounts/discover", asyncHandler(async (_req, res) => 
     FROM hotels h
     LEFT JOIN staff    s ON s.hotel_id = h.id AND s.role = 'manager'
     LEFT JOIN bookings b ON b.hotel_id = h.id
-    LEFT JOIN guests   g ON g.booking_id = b.id
+    LEFT JOIN guests   g ON g.hotel_id = h.id
     GROUP BY h.id, h.name, h.created_at, s.email, s.name
     ORDER BY MAX(b.created_at) DESC NULLS LAST, h.created_at DESC
     LIMIT 4
@@ -149,23 +149,22 @@ adminRouter.get("/protect-accounts/discover", asyncHandler(async (_req, res) => 
 // ─── GET /api/admin/protect-accounts/detail/:hotelId — TEMP: full detail ──────
 adminRouter.get("/protect-accounts/detail/:hotelId", asyncHandler(async (req, res) => {
   const hid = req.params.hotelId;
-  const [bookings, messages, alerts, waypoints, docs] = await Promise.all([
-    query(`SELECT id, guest_name, guest_email, status, check_in, check_out, created_at
-           FROM bookings WHERE hotel_id = $1 ORDER BY created_at DESC`, [hid]),
+  const [bookings, messages, notifications, waypoints] = await Promise.all([
+    query(`SELECT b.id, g.name AS guest_name, g.email AS guest_email,
+                  b.status, b.check_in, b.check_out, b.created_at
+           FROM bookings b JOIN guests g ON g.id = b.guest_id
+           WHERE b.hotel_id = $1 ORDER BY b.created_at DESC`, [hid]),
     query(`SELECT COUNT(*)::int AS message_count FROM messages WHERE hotel_id = $1`, [hid]),
-    query(`SELECT COUNT(*)::int AS alert_count   FROM alerts   WHERE hotel_id = $1`, [hid]),
-    query(`SELECT COUNT(*)::int AS waypoint_count FROM nav_waypoints WHERE hotel_id = $1`, [hid])
+    query(`SELECT COUNT(*)::int AS notification_count FROM notifications WHERE hotel_id = $1`, [hid]),
+    query(`SELECT COUNT(*)::int AS waypoint_count FROM navigation_waypoints WHERE hotel_id = $1`, [hid])
       .catch(() => ({ rows: [{ waypoint_count: 0 }] })),
-    query(`SELECT COUNT(*)::int AS doc_count FROM guest_documents WHERE hotel_id = $1`, [hid])
-      .catch(() => ({ rows: [{ doc_count: 0 }] })),
   ]);
   res.json({
-    hotel_id: hid,
-    bookings:       bookings.rows,
-    message_count:  messages.rows[0].message_count,
-    alert_count:    alerts.rows[0].alert_count,
-    waypoint_count: waypoints.rows[0].waypoint_count,
-    doc_count:      docs.rows[0].doc_count,
+    hotel_id:           hid,
+    bookings:           bookings.rows,
+    message_count:      messages.rows[0].message_count,
+    notification_count: notifications.rows[0].notification_count,
+    waypoint_count:     waypoints.rows[0].waypoint_count,
   });
 }));
 
@@ -196,7 +195,7 @@ adminRouter.post("/protect-accounts/run", asyncHandler(async (req, res) => {
        ON CONFLICT DO NOTHING RETURNING id, hotel_id`,
       [hid]
     );
-    inserts.push(r.rows[0] || { hotel_id: hid, note: "already existed" });
+    inserts.push(r.rows[0] || { hotel_id: hid, note: "already existed or no conflict target" });
   }
 
   // 3. Reset manager passwords
