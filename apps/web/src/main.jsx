@@ -1507,9 +1507,10 @@ function ManagerDashboard({ api, initialSettings }) {
     staff: [], accessLog: [], serviceRequests: [],
     alerts: { unresolved: [], resolved: [] },
   });
-  const [sessionCount,    setSessionCount]    = useState(1);
-  const [socketConnected, setSocketConnected] = useState(false);
-  const [menuOpen,        setMenuOpen]        = useState(false);
+  const [sessionCount,       setSessionCount]       = useState(1);
+  const [socketConnected,    setSocketConnected]    = useState(false);
+  const [menuOpen,           setMenuOpen]           = useState(false);
+  const [isEditingSettings,  setIsEditingSettings]  = useState(false);
   const { toast, show } = useToast();
 
   const NAV = [
@@ -1554,6 +1555,7 @@ function ManagerDashboard({ api, initialSettings }) {
   }, []);
 
   async function loadAll() {
+    if (isEditingSettings) return; // never overwrite form while manager is editing
     const settled = await Promise.allSettled([
       api.request("/api/auth/me"),
       api.request("/api/rooms"),
@@ -1584,8 +1586,8 @@ function ManagerDashboard({ api, initialSettings }) {
 
   useEffect(() => {
     loadAll().catch(() => api.logout());
-    // 10-second safety-net poll — catches anything Socket.IO missed
-    const interval = setInterval(() => { loadAllRef.current(); }, 10_000);
+    // 30-second safety-net poll — catches anything Socket.IO missed
+    const interval = setInterval(() => { loadAllRef.current(); }, 30_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1727,7 +1729,9 @@ function ManagerDashboard({ api, initialSettings }) {
             )}
             {active === "staff" && <MgrStaff api={api} data={data} reload={loadAll} show={show} />}
             {active === "analytics" && <MgrAnalytics api={api} data={data} />}
-            {active === "settings" && <MgrSettings api={api} data={data} reload={loadAll} show={show} />}
+            {active === "settings" && <MgrSettings api={api} data={data} reload={loadAll} show={show}
+              onEditStart={() => setIsEditingSettings(true)}
+              onEditEnd={() => setIsEditingSettings(false)} />}
           </div>
         </section>
       </section>
@@ -3312,7 +3316,7 @@ function NavEditor({ api, show }) {
   );
 }
 
-function MgrSettings({ api, data, reload, show }) {
+function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
   const s = data.settings || {};
   const [form, setForm] = useState({
     name: s.name || "", address: s.address || "", logoUrl: s.logo_url || "",
@@ -3333,6 +3337,9 @@ function MgrSettings({ api, data, reload, show }) {
   const [smtpAdding, setSmtpAdding] = useState(false);
   const [smtpTestTo, setSmtpTestTo] = useState("");
   const [smtpTesting, setSmtpTesting] = useState(null);
+
+  // Reset editing flag when the settings panel unmounts (manager navigated away)
+  useEffect(() => () => { onEditEnd?.(); }, []);
 
   useEffect(() => {
     setForm({
@@ -3361,6 +3368,7 @@ function MgrSettings({ api, data, reload, show }) {
       setSmtpConfigs(c => [...c, cfg]);
       setSmtpForm(SMTP_BLANK);
       setSmtpAdding(false);
+      onEditEnd?.();
       show("Email config saved", "success");
     } catch (err) { show(err.message, "error"); }
   }
@@ -3403,6 +3411,7 @@ function MgrSettings({ api, data, reload, show }) {
           country: form.country, kycRequired: form.kycRequired, kycDocuments: form.kycDocuments,
         }),
       });
+      onEditEnd?.(); // save complete — allow auto-refresh again
       reload(); show("Saved", "success");
     } catch (err) { show(err.message, "error"); }
   }
@@ -3421,7 +3430,7 @@ function MgrSettings({ api, data, reload, show }) {
       </div>
 
       {tab === "brand" && (
-        <form className="panel stack" onSubmit={saveBrand}>
+        <form className="panel stack" onSubmit={saveBrand} onFocus={onEditStart}>
           <h2>Hotel brand</h2>
           <input placeholder="Hotel name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <input placeholder="Address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
@@ -3556,7 +3565,7 @@ function MgrSettings({ api, data, reload, show }) {
 
           {smtpConfigs.length < 4 && (
             smtpAdding ? (
-              <form className="smtp-add-form panel" onSubmit={addSmtp}>
+              <form className="smtp-add-form panel" onSubmit={addSmtp} onFocus={onEditStart}>
                 <h3>Add email sender</h3>
 
                 {/* Provider selector */}
@@ -3950,8 +3959,7 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
             <div className="kyc-upload-section">
               <div className="kyc-notice">
                 <p style={{ margin: 0 }}>
-                  📄 {hotelKyc.hotel_name} requires document verification.
-                  Documents are stored securely and automatically deleted after 1 year.
+                  Documents shared only with {hotelKyc.hotel_name}.
                 </p>
               </div>
 
@@ -3959,11 +3967,11 @@ function ProfileSetup({ token, booking, onComplete, lang, show, toast }) {
                 <div className="kyc-choice">
                   <button type="button" className="primary"
                     onClick={() => setKycChoice("now")}>
-                    Upload now — skip paperwork at reception
+                    Upload now — skip the paperwork at reception
                   </button>
                   <button type="button" className="ghost"
                     onClick={() => setKycChoice("later")}>
-                    Do at reception — bring documents when I arrive
+                    Do at reception — bring your documents when you arrive
                   </button>
                 </div>
               )}
