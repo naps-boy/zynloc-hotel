@@ -17,3 +17,5 @@ services:
         value: https://zynloc-hotel.pages.dev
       - key: ADMIN_SECRET
         value: ZynlocAdmin2026!
+      - key: MAIL_FROM
+        value: "Zynloc Hotel <zynloc@veltaforge.com>"

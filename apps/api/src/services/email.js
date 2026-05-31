@@ -53,13 +53,18 @@ async function sendViaBrevo(cfg, mailOpts) {
     ? mailOpts.to.map(e => ({ email: e.trim() }))
     : [{ email: mailOpts.to }];
 
+  // Primary sender — professional domain
+  const primarySender  = { name: "Zynloc Hotel", email: "zynloc@veltaforge.com" };
+  // Fallback sender — verified Gmail address
+  const fallbackSender = { name: "Zynloc Hotel", email: "mehnapoelionfuh@gmail.com" };
+
   const body = {
-    sender:      { name: cfg.sender_name, email: cfg.email },
+    sender:      primarySender,
     to,
     subject:     mailOpts.subject,
     htmlContent: mailOpts.html,
     headers: {
-      "List-Unsubscribe": `<mailto:${cfg.email}?subject=unsubscribe>`,
+      "List-Unsubscribe": `<mailto:${primarySender.email}?subject=unsubscribe>`,
       "X-Mailer":         "Zynloc Hotel Platform",
     },
   };
@@ -73,7 +78,7 @@ async function sendViaBrevo(cfg, mailOpts) {
     }));
   }
 
-  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+  let res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method:  "POST",
     headers: {
       "api-key":      apiKey,
@@ -81,6 +86,27 @@ async function sendViaBrevo(cfg, mailOpts) {
     },
     body: JSON.stringify(body),
   });
+
+  // If primary veltaforge.com sender fails (domain not yet verified), fall back to Gmail
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    console.log(`[Brevo] HTTP ${res.status} response:`, JSON.stringify(errBody));
+    if (errBody?.message?.includes("sender") || res.status === 400) {
+      console.log("[Email] Primary sender failed, using fallback Gmail sender");
+      body.sender  = fallbackSender;
+      body.headers["List-Unsubscribe"] = `<mailto:${fallbackSender.email}?subject=unsubscribe>`;
+      res = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method:  "POST",
+        headers: {
+          "api-key":      apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } else {
+      throw new Error(errBody.message || `Brevo error ${res.status}`);
+    }
+  }
 
   const json = await res.json().catch(() => ({}));
   console.log(`[Brevo] HTTP ${res.status} response:`, JSON.stringify(json));

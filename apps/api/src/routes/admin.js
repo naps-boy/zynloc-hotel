@@ -122,10 +122,12 @@ adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   res.json(rows);
 }));
 
-// ─── GET /api/admin/smtp-key — temp: expose brevo key for domain config ───────
-adminRouter.get("/smtp-key", asyncHandler(async (_req, res) => {
+// ─── POST /api/admin/update-smtp-sender — temp: update default brevo sender ──
+adminRouter.post("/update-smtp-sender", asyncHandler(async (_req, res) => {
   const { rows } = await query(
-    "SELECT smtp_pass, email, sender_name FROM smtp_configs WHERE provider = 'brevo' AND is_default = TRUE ORDER BY created_at LIMIT 1"
+    `UPDATE smtp_configs SET email = 'zynloc@veltaforge.com', sender_name = 'Zynloc Hotel'
+     WHERE is_default = TRUE AND provider = 'brevo'
+     RETURNING id, email, sender_name`
   );
-  res.json(rows[0] || null);
+  res.json({ updated: rows.length, rows });
 }));
