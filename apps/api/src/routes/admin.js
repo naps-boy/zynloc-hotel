@@ -121,3 +121,104 @@ adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   `);
   res.json(rows);
 }));
+
+// ─── GET /api/admin/protect-accounts — TEMP: find top 4 active hotels ─────────
+adminRouter.get("/protect-accounts/discover", asyncHandler(async (_req, res) => {
+  const { rows } = await query(`
+    SELECT
+      h.id,
+      h.name,
+      h.created_at,
+      s.email AS manager_email,
+      s.name  AS manager_name,
+      COUNT(DISTINCT b.id)::int AS total_bookings,
+      COUNT(DISTINCT g.id)::int AS total_guests,
+      MAX(b.created_at)         AS last_booking,
+      MAX(s.created_at)         AS last_staff_activity
+    FROM hotels h
+    LEFT JOIN staff    s ON s.hotel_id = h.id AND s.role = 'manager'
+    LEFT JOIN bookings b ON b.hotel_id = h.id
+    LEFT JOIN guests   g ON g.booking_id = b.id
+    GROUP BY h.id, h.name, h.created_at, s.email, s.name
+    ORDER BY MAX(b.created_at) DESC NULLS LAST, h.created_at DESC
+    LIMIT 4
+  `);
+  res.json(rows);
+}));
+
+// ─── GET /api/admin/protect-accounts/detail/:hotelId — TEMP: full detail ──────
+adminRouter.get("/protect-accounts/detail/:hotelId", asyncHandler(async (req, res) => {
+  const hid = req.params.hotelId;
+  const [bookings, messages, alerts, waypoints, docs] = await Promise.all([
+    query(`SELECT id, guest_name, guest_email, status, check_in, check_out, created_at
+           FROM bookings WHERE hotel_id = $1 ORDER BY created_at DESC`, [hid]),
+    query(`SELECT COUNT(*)::int AS message_count FROM messages WHERE hotel_id = $1`, [hid]),
+    query(`SELECT COUNT(*)::int AS alert_count   FROM alerts   WHERE hotel_id = $1`, [hid]),
+    query(`SELECT COUNT(*)::int AS waypoint_count FROM nav_waypoints WHERE hotel_id = $1`, [hid])
+      .catch(() => ({ rows: [{ waypoint_count: 0 }] })),
+    query(`SELECT COUNT(*)::int AS doc_count FROM guest_documents WHERE hotel_id = $1`, [hid])
+      .catch(() => ({ rows: [{ doc_count: 0 }] })),
+  ]);
+  res.json({
+    hotel_id: hid,
+    bookings:       bookings.rows,
+    message_count:  messages.rows[0].message_count,
+    alert_count:    alerts.rows[0].alert_count,
+    waypoint_count: waypoints.rows[0].waypoint_count,
+    doc_count:      docs.rows[0].doc_count,
+  });
+}));
+
+// ─── POST /api/admin/protect-accounts/run — TEMP: create table, insert, reset pw
+adminRouter.post("/protect-accounts/run", asyncHandler(async (req, res) => {
+  const { hotel_ids, password_hash } = req.body;
+  if (!Array.isArray(hotel_ids) || hotel_ids.length === 0) {
+    return res.status(400).json({ error: "hotel_ids required" });
+  }
+  if (!password_hash) return res.status(400).json({ error: "password_hash required" });
+
+  // 1. Create protected_accounts table
+  await query(`
+    CREATE TABLE IF NOT EXISTS protected_accounts (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      hotel_id     UUID NOT NULL REFERENCES hotels(id),
+      reason       VARCHAR(255) DEFAULT 'test account - preserve all data',
+      protected_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+
+  // 2. Insert hotel IDs
+  const inserts = [];
+  for (const hid of hotel_ids) {
+    const r = await query(
+      `INSERT INTO protected_accounts (hotel_id, reason)
+       VALUES ($1, 'test account - preserve all data - do not delete')
+       ON CONFLICT DO NOTHING RETURNING id, hotel_id`,
+      [hid]
+    );
+    inserts.push(r.rows[0] || { hotel_id: hid, note: "already existed" });
+  }
+
+  // 3. Reset manager passwords
+  const pwUpdate = await query(
+    `UPDATE staff SET password_hash = $1
+     WHERE hotel_id = ANY($2::uuid[]) AND role = 'manager'
+     RETURNING id, hotel_id, email, name`,
+    [password_hash, hotel_ids]
+  );
+
+  // 4. Verify protected_accounts rows
+  const verify = await query(
+    `SELECT pa.hotel_id, h.name, pa.reason, pa.protected_at
+     FROM protected_accounts pa JOIN hotels h ON h.id = pa.hotel_id
+     WHERE pa.hotel_id = ANY($1::uuid[])`,
+    [hotel_ids]
+  );
+
+  res.json({
+    table_created:     true,
+    inserts,
+    passwords_updated: pwUpdate.rows,
+    verification:      verify.rows,
+  });
+}));
