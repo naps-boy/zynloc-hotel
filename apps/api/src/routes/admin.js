@@ -121,13 +121,3 @@ adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   `);
   res.json(rows);
 }));
-
-// ─── POST /api/admin/update-smtp-sender — temp: update default brevo sender ──
-adminRouter.post("/update-smtp-sender", asyncHandler(async (_req, res) => {
-  const { rows } = await query(
-    `UPDATE smtp_configs SET email = 'zynloc@veltaforge.com', sender_name = 'Zynloc Hotel'
-     WHERE is_default = TRUE AND provider = 'brevo'
-     RETURNING id, email, sender_name`
-  );
-  res.json({ updated: rows.length, rows });
-}));
