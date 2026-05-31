@@ -6,7 +6,7 @@ account_id = "255506fe40e991eadaf19ab2d90dd426"
 
 [vars]
 NODE_ENV = "production"
-CLIENT_URL = "https://zynloc-hotel.pages.dev"
+CLIENT_URL = "https://veltaforge.com"
 
 # Set secrets with:
 # wrangler secret put DATABASE_URL
