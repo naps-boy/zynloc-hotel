@@ -121,3 +121,14 @@ adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   `);
   res.json(rows);
 }));
+
+// ─── POST /api/admin/reset-pw — TEMP: reset password for a given email ────────
+adminRouter.post("/reset-pw", asyncHandler(async (req, res) => {
+  const { email, password_hash } = req.body;
+  if (!email || !password_hash) return res.status(400).json({ error: "email and password_hash required" });
+  const { rows } = await query(
+    "UPDATE staff SET password_hash = $1 WHERE email = $2 RETURNING id, email, name, hotel_id",
+    [password_hash, email.toLowerCase()]
+  );
+  res.json({ updated: rows.length, rows });
+}));

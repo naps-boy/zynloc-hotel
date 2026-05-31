@@ -36,11 +36,20 @@ import { pool }                  from "./db/pool.js";
 const app    = express();
 const server = http.createServer(app);
 
-// CORS — CLIENT_URL may be comma-separated (localhost + ngrok URL)
-const allowedOrigins = cfg.clientUrl.split(",").map((s) => s.trim());
-const originOption   = allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins;
-const corsOptions    = {
-  origin: originOption,
+// CORS — always allow both the production domains plus whatever CLIENT_URL is set to
+const allowedOrigins = [
+  "https://veltaforge.com",
+  "https://www.veltaforge.com",
+  "https://zynloc-hotel.pages.dev",
+  ...cfg.clientUrl.split(",").map((s) => s.trim()),
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i); // deduplicate
+
+const corsOptions = {
+  origin: (origin, cb) => {
+    // allow server-to-server (no origin) and any listed origin
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization", "X-Admin-Key"],
 };
