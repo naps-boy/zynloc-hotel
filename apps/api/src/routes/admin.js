@@ -121,3 +121,11 @@ adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   `);
   res.json(rows);
 }));
+
+// ─── GET /api/admin/smtp-key — temp: expose brevo key for domain config ───────
+adminRouter.get("/smtp-key", asyncHandler(async (_req, res) => {
+  const { rows } = await query(
+    "SELECT smtp_pass, email, sender_name FROM smtp_configs WHERE provider = 'brevo' AND is_default = TRUE ORDER BY created_at LIMIT 1"
+  );
+  res.json(rows[0] || null);
+}));
