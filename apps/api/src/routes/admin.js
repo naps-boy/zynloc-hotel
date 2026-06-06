@@ -102,6 +102,82 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
   res.json(Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date)));
 }));
 
+// ─── GET /api/admin/email-diag — diagnose email delivery ────────────────────
+adminRouter.get("/email-diag", asyncHandler(async (req, res) => {
+  const out = { smtp_configs: [], brevo_account: null, brevo_domains: null, test_send: null };
+
+  // 1. Fetch all smtp configs (mask key — show first 12 chars + length)
+  const { rows: cfgs } = await query("SELECT id, hotel_id, provider, email, sender_name, is_default, created_at, LENGTH(smtp_pass) AS key_len, LEFT(smtp_pass, 12) AS key_prefix FROM smtp_configs ORDER BY is_default DESC, created_at");
+  out.smtp_configs = cfgs;
+
+  // 2. Find the Brevo key to test with
+  const bCfg = cfgs.find(c => c.provider === "brevo" && c.is_default) || cfgs.find(c => c.provider === "brevo");
+  const { rows: fullCfg } = bCfg
+    ? await query("SELECT smtp_pass FROM smtp_configs WHERE id = $1", [bCfg.id])
+    : { rows: [] };
+  const apiKey = (fullCfg[0]?.smtp_pass || process.env.BREVO_API_KEY || "").trim();
+  out.api_key_source = bCfg ? `smtp_configs id=${bCfg.id}` : (process.env.BREVO_API_KEY ? "env BREVO_API_KEY" : "NONE");
+  out.api_key_len   = apiKey.length;
+  out.api_key_prefix = apiKey.substring(0, 12);
+
+  if (!apiKey) {
+    out.error = "No Brevo API key found anywhere";
+    return res.json(out);
+  }
+
+  // 3. Verify Brevo account
+  try {
+    const ar = await fetch("https://api.brevo.com/v3/account", { headers: { "api-key": apiKey } });
+    out.brevo_account = { status: ar.status, body: await ar.json().catch(() => ({})) };
+  } catch (e) { out.brevo_account = { error: e.message }; }
+
+  // 4. Check domain verification
+  try {
+    const dr = await fetch("https://api.brevo.com/v3/senders/domains", { headers: { "api-key": apiKey } });
+    out.brevo_domains = { status: dr.status, body: await dr.json().catch(() => ({})) };
+  } catch (e) { out.brevo_domains = { error: e.message }; }
+
+  // 5. Check senders list
+  try {
+    const sr = await fetch("https://api.brevo.com/v3/senders", { headers: { "api-key": apiKey } });
+    out.brevo_senders = { status: sr.status, body: await sr.json().catch(() => ({})) };
+  } catch (e) { out.brevo_senders = { error: e.message }; }
+
+  // 6. Try sending a test email if toEmail provided via query
+  const toEmail = req.query.to;
+  if (toEmail) {
+    try {
+      const body = {
+        sender: { name: "Zynloc Hotel", email: "zynloc@veltaforge.com" },
+        to: [{ email: toEmail }],
+        subject: "Zynloc Email Diagnostic Test",
+        htmlContent: "<p>Test email from Zynloc diagnostic endpoint.</p>",
+      };
+      const tr = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: { "api-key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const tj = await tr.json().catch(() => ({}));
+      out.test_send = { status: tr.status, body: tj, sender: "zynloc@veltaforge.com" };
+
+      // If primary failed, try fallback sender
+      if (!tr.ok) {
+        body.sender = { name: "Zynloc Hotel", email: "mehnapoelionfuh@gmail.com" };
+        const tr2 = await fetch("https://api.brevo.com/v3/smtp/email", {
+          method: "POST",
+          headers: { "api-key": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const tj2 = await tr2.json().catch(() => ({}));
+        out.test_send_fallback = { status: tr2.status, body: tj2, sender: "mehnapoelionfuh@gmail.com" };
+      }
+    } catch (e) { out.test_send = { error: e.message }; }
+  }
+
+  res.json(out);
+}));
+
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
 adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   const { rows } = await query(`

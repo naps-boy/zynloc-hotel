@@ -1094,6 +1094,261 @@ function AdminDashboard() {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
+// ── LandingPage ───────────────────────────────────────────────────────────────
+
+function LandingPage() {
+  useEffect(() => {
+    const els = document.querySelectorAll(".lp-reveal,.lp-reveal-l,.lp-reveal-r");
+    const obs = new IntersectionObserver(entries => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add("lp-vis"); obs.unobserve(e.target); } });
+    }, { threshold: 0.1, rootMargin: "0px 0px -36px 0px" });
+    els.forEach(el => obs.observe(el));
+    return () => obs.disconnect();
+  }, []);
+
+  function goLogin()    { window.location.href = "/login"; }
+  function goRegister() { window.location.href = "/register"; }
+
+  return (
+    <div className="lp">
+
+      {/* AUTH TOP */}
+      <section className="lp-auth">
+        <div className="lp-logo-center">ZYNLOC</div>
+        <p className="lp-subtitle">Hotel Management Platform</p>
+        <div className="lp-auth-btns">
+          <button className="lp-btn-primary" onClick={goLogin}>Login to Dashboard →</button>
+          <button className="lp-btn-outline" onClick={goRegister}>Register Your Hotel →</button>
+        </div>
+        <p className="lp-auth-hint">Already have an account? <button style={{background:"none",border:"none",color:"#f0a500",fontWeight:600,cursor:"pointer",fontSize:"inherit",padding:0}} onClick={goLogin}>Login here</button></p>
+      </section>
+
+      {/* NAV */}
+      <nav className="lp-nav">
+        <span className="lp-nav-logo">ZYNLOC</span>
+      </nav>
+
+      {/* HERO */}
+      <section className="lp-hero">
+        <div className="lp-badge lp-anim-1">✦ Built for boutique hotels &amp; villas</div>
+        <h1 className="lp-anim-2">A smoother guest journey.<br /><em>Simpler hotel operations.</em></h1>
+        <p className="lp-anim-3">Zynloc gives boutique hotels and villas a complete digital guest experience — from pre-arrival check-in to digital checkout — with real-time operations for your team. Works on any phone. No app download needed.</p>
+        <div className="lp-hero-btns lp-anim-4">
+          <button className="lp-btn-outline" onClick={() => document.getElementById("lp-journey").scrollIntoView({behavior:"smooth"})}>See How It Works ↓</button>
+        </div>
+        <p className="lp-contact-hint lp-anim-5">To apply for pilot access or book a demo — email us at <span>zynloc@veltaforge.com</span></p>
+        <div className="lp-trust lp-anim-5">
+          <div className="lp-trust-item"><b>✓</b> No app download required</div>
+          <div className="lp-trust-item"><b>✓</b> Works without internet</div>
+          <div className="lp-trust-item"><b>✓</b> Setup in one day</div>
+        </div>
+      </section>
+
+      {/* GUEST JOURNEY */}
+      <section className="lp-sec lp-journey" id="lp-journey">
+        <div className="lp-journey-hdr lp-reveal">
+          <div className="lp-sec-label">The Guest Journey</div>
+          <h2 className="lp-sec-title">From Arrival to Checkout</h2>
+          <p className="lp-sec-sub" style={{margin:"0 auto"}}>Every step of the guest experience, handled digitally.</p>
+        </div>
+        <div className="lp-phases">
+          <div className="lp-phase">
+            <div className="lp-phase-c lp-reveal-l">
+              <div className="lp-phase-num">Phase 01</div>
+              <span className="lp-phase-ico">📧</span>
+              <h3>Guest receives their digital access link</h3>
+              <p>When a booking is created, the guest receives an email with a personal link. They upload their selfie and identity documents securely before they even arrive. Check-in is prepared in advance.</p>
+            </div>
+            <div className="lp-phase-v lp-reveal-r">
+              <div className="lp-phase-v-ico">📩</div>
+              <div className="lp-phase-v-title">Booking Confirmed</div>
+              <div className="lp-phase-v-sub">Your guest receives a personal link instantly. They verify their identity from home.</div>
+              <div className="lp-tags"><span className="lp-tag lp-tag-gold">Pre-check-in link sent</span><span className="lp-tag lp-tag-gold">ID upload</span><span className="lp-tag lp-tag-gold">Selfie verification</span></div>
+            </div>
+          </div>
+          <div className="lp-phase rev">
+            <div className="lp-phase-c lp-reveal-r">
+              <div className="lp-phase-num">Phase 02</div>
+              <span className="lp-phase-ico">📱</span>
+              <h3>Scan to check in. No queuing.</h3>
+              <p>Guest opens their phone camera and points it at the hotel reception QR code. Their profile appears on the manager screen for instant visual verification. Check-in confirmed with one tap.</p>
+            </div>
+            <div className="lp-phase-v lp-reveal-l">
+              <div className="lp-phase-v-ico">🔍</div>
+              <div className="lp-phase-v-title">QR Scan → Instant Match</div>
+              <div className="lp-phase-v-sub">The manager sees the guest's photo and documents the moment the QR is scanned.</div>
+              <div className="lp-tags"><span className="lp-tag lp-tag-green">✓ Identity verified</span><span className="lp-tag lp-tag-green">✓ Checked in</span></div>
+            </div>
+          </div>
+          <div className="lp-phase">
+            <div className="lp-phase-c lp-reveal-l">
+              <div className="lp-phase-num">Phase 03</div>
+              <span className="lp-phase-ico">🏨</span>
+              <h3>Everything they need. In their pocket.</h3>
+              <p>Guest navigates to their room with turn-by-turn directions and real corridor photos. They access facilities automatically — pool, restaurant, gym — with a tap. Message staff. Request services.</p>
+            </div>
+            <div className="lp-phase-v lp-reveal-r">
+              <div className="lp-phase-v-ico">🗺️</div>
+              <div className="lp-phase-v-title">Indoor Navigation</div>
+              <div className="lp-phase-v-sub">Turn-by-turn directions using real photos of your corridors. No app. No WiFi required.</div>
+              <div className="lp-tags"><span className="lp-tag lp-tag-gold">Navigation</span><span className="lp-tag lp-tag-gold">Facility access</span><span className="lp-tag lp-tag-gold">Staff messaging</span></div>
+            </div>
+          </div>
+          <div className="lp-phase rev">
+            <div className="lp-phase-c lp-reveal-r">
+              <div className="lp-phase-num">Phase 04</div>
+              <span className="lp-phase-ico">✅</span>
+              <h3>Digital checkout. Zero paperwork.</h3>
+              <p>Guest checks out digitally. All access expires instantly. Their room is flagged for housekeeping automatically. A digital receipt is emailed. No queuing. No paperwork. Done.</p>
+            </div>
+            <div className="lp-phase-v lp-reveal-l">
+              <div className="lp-phase-v-ico">🧾</div>
+              <div className="lp-phase-v-title">Checkout Complete</div>
+              <div className="lp-phase-v-sub">One tap. All access revoked. Room flagged for housekeeping. Receipt emailed automatically.</div>
+              <div className="lp-tags"><span className="lp-tag lp-tag-red">Access revoked</span><span className="lp-tag lp-tag-gold">Receipt sent</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* GUEST FEATURES */}
+      <section className="lp-sec" style={{background:"#0a0f1e"}}>
+        <div className="lp-reveal">
+          <div className="lp-sec-label">Guest Experience</div>
+          <h2 className="lp-sec-title">A hotel experience guests remember</h2>
+          <p className="lp-sec-sub">Everything your guest needs, delivered through their phone browser. No downloads. No friction.</p>
+        </div>
+        <div className="lp-feat-grid">
+          <div className="lp-feat-list">
+            {[["Booking confirmation","with personal digital access link"],["Upload identity documents","securely before arrival"],["Scan reception QR to check in","works on iPhone or Android"],["Turn-by-turn indoor navigation","to their room, with real photos"],["Automatic facility access","pool, restaurant, gym with a tap"],["Direct messaging","with hotel staff in real time"],["Service requests","cleaning, towels, maintenance"],["Digital checkout","no queuing, no paperwork, receipt emailed"]].map(([title, desc], i) => (
+              <div key={i} className={`lp-feat-item lp-reveal lp-d${(i%4)+1}`}>
+                <span className="lp-feat-chk">✓</span>
+                <span className="lp-feat-txt"><strong>{title}</strong> — {desc}</span>
+              </div>
+            ))}
+          </div>
+          <div className="lp-reveal-r" style={{display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <div className="lp-phone">
+              <div className="lp-phone-screen">
+                <div style={{fontSize:44,marginBottom:12}}>📱</div>
+                <div style={{fontSize:14,fontWeight:700,color:"#fff",marginBottom:6}}>Guest App</div>
+                <div style={{fontSize:12,color:"#a0aec0",marginBottom:16}}>Navigation, access, messaging — all here.</div>
+                <div className="lp-mock-row">
+                  <div className="lp-mock-chip gold">📍 Room 204 — 3 minutes away</div>
+                  <div className="lp-mock-chip green">🏊 Pool access — tap to enter</div>
+                  <div className="lp-mock-chip muted">💬 Message reception</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* TEAM FEATURES */}
+      <section className="lp-sec" style={{background:"#0d1424"}}>
+        <div className="lp-reveal">
+          <div className="lp-sec-label">Hotel Operations</div>
+          <h2 className="lp-sec-title">Operations your team will actually use</h2>
+          <p className="lp-sec-sub">A real-time command centre for your entire hotel. Every guest, every room, every alert.</p>
+        </div>
+        <div className="lp-feat-grid" style={{direction:"rtl"}}>
+          <div className="lp-feat-list" style={{direction:"ltr"}}>
+            {[["Real-time dashboard","every guest, every room, every facility"],["Instant alerts","arrivals, access denied, service requests, late checkouts"],["Guest profiles","with photos and document verification"],["Revoke or restore guest access","instantly from any device"],["Emergency broadcast","message all checked-in guests at once"],["Staff roles","manager, receptionist, housekeeping, security"],["Analytics","occupancy, revenue, facility usage over time"],["Works everywhere","phone, tablet, and laptop"]].map(([title, desc], i) => (
+              <div key={i} className={`lp-feat-item lp-reveal lp-d${(i%4)+1}`}>
+                <span className="lp-feat-chk">✓</span>
+                <span className="lp-feat-txt"><strong>{title}</strong> — {desc}</span>
+              </div>
+            ))}
+          </div>
+          <div className="lp-reveal-l" style={{direction:"ltr",display:"flex",flexDirection:"column",gap:0}}>
+            <div className="lp-laptop">
+              <div className="lp-laptop-screen">
+                <div style={{fontSize:32,marginBottom:10}}>🖥️</div>
+                <div style={{fontSize:14,fontWeight:700,color:"#fff",marginBottom:4}}>Manager Dashboard</div>
+                <div style={{fontSize:12,color:"#a0aec0",marginBottom:16}}>Live view of your entire hotel</div>
+                <div className="lp-mock-row">
+                  <div className="lp-mock-chip gold between"><span>🟢 Active guests</span><span>12</span></div>
+                  <div className="lp-mock-chip red between"><span>⚠️ Late checkout</span><span>2 rooms</span></div>
+                  <div className="lp-mock-chip muted between"><span>🔧 Service requests</span><span>3 open</span></div>
+                  <div className="lp-mock-chip green between"><span>📊 Occupancy today</span><span>87%</span></div>
+                </div>
+              </div>
+            </div>
+            <div className="lp-laptop-base" />
+            <div className="lp-laptop-foot" />
+          </div>
+        </div>
+      </section>
+
+      {/* DIFFERENTIATORS */}
+      <section className="lp-sec" style={{background:"#0a0f1e"}}>
+        <div className="lp-sec-center lp-reveal">
+          <div className="lp-sec-label">Why Zynloc</div>
+          <h2 className="lp-sec-title">Built different from the ground up</h2>
+          <p className="lp-sec-sub">Three decisions we made on day one that every other hotel software got wrong.</p>
+        </div>
+        <div className="lp-diff-grid">
+          {[["🌐","Offline First","Most hotel software stops working when the internet drops. Zynloc was built offline-first from day zero. Guest check-ins, facility access, and navigation all work without connectivity. Critical in Bali, Mauritius, Nairobi, and beyond."],
+            ["📱","No App Download","Guests use their phone browser. Nothing to install. No App Store. No permissions. Works on every iPhone and Android instantly. Your guests arrive ready."],
+            ["⚡","One Day Setup","Upload your floor plan. Add your rooms. Print your QR codes. Your first guest can check in digitally the same day. No engineers. No hardware installation."]
+          ].map(([ico,title,desc],i) => (
+            <div key={i} className={`lp-diff-card lp-reveal lp-d${i+1}`}>
+              <span className="lp-diff-ico">{ico}</span>
+              <h3>{title}</h3>
+              <p>{desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* FOUNDING PARTNER */}
+      <section className="lp-sec lp-partner-wrap">
+        <div className="lp-partner-card lp-reveal">
+          <div className="lp-pbadge">✦ LIMITED — 5 SPOTS ONLY</div>
+          <h2>Founding Partner Program</h2>
+          <p className="lp-partner-sub">We are onboarding our first 5 pilot hotels.<br /><strong style={{color:"#fff"}}>Free access. Forever.</strong></p>
+          <div className="lp-benefits">
+            {["Free access to all features — permanently","Your feedback directly shapes the product","Direct line to the founders — not a support ticket","Locked in partner pricing when paid plans launch"].map((b,i) => (
+              <div key={i} className="lp-benefit"><span className="lp-benefit-chk">✓</span><span className="lp-benefit-txt">{b}</span></div>
+            ))}
+          </div>
+          <div className="lp-ask">
+            <div className="lp-ask-title">What we ask in return</div>
+            {["Use Zynloc with real guests for 30 days","Give us honest feedback","A testimonial if you love it"].map((a,i) => (
+              <div key={i} className="lp-ask-item"><span className="lp-ask-bullet">→</span>{a}</div>
+            ))}
+          </div>
+          <div className="lp-contact-block">
+            <p className="lp-contact-text">To apply for the founding partner program or book a demo call:</p>
+            <p className="lp-contact-email">zynloc@veltaforge.com</p>
+            <p className="lp-contact-note">We respond within 24 hours.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* AUTH BOTTOM */}
+      <section className="lp-auth-bottom">
+        <h2>Ready to get started?</h2>
+        <p>Join hotels already using Zynloc to automate their guest experience.</p>
+        <div className="lp-auth-btns">
+          <button className="lp-btn-primary" onClick={goLogin}>Login to Dashboard →</button>
+          <button className="lp-btn-outline" onClick={goRegister}>Register Your Hotel →</button>
+        </div>
+      </section>
+
+      {/* FOOTER */}
+      <footer className="lp-footer">
+        <div className="lp-footer-main">
+          <div className="lp-footer-logo">ZYNLOC<span>by Veltaforge · © 2026</span></div>
+          <div className="lp-footer-right"><span className="lp-footer-email">zynloc@veltaforge.com</span></div>
+        </div>
+        <p className="lp-footer-copy">Zynloc is a product of Veltaforge. Built for boutique hotels and villas worldwide.</p>
+      </footer>
+
+    </div>
+  );
+}
+
 function App() {
   const api = useApi();
   const parts  = window.location.pathname.split("/").filter(Boolean);
@@ -1107,14 +1362,18 @@ function App() {
   if (parts[0] === "reset-password"  && params.get("token")) {
     return <ResetPassword resetToken={params.get("token")} />;
   }
-  if (!api.token) return <Login api={api} />;
+  if (!api.token) {
+    if (parts[0] === "login")    return <Login api={api} initialMode="login" />;
+    if (parts[0] === "register") return <Login api={api} initialMode="register" />;
+    return <LandingPage />;
+  }
   return <ManagerRoot api={api} />;
 }
 
 // ── Login ─────────────────────────────────────────────────────────────────────
 
-function Login({ api }) {
-  const [mode, setMode] = useState("login");
+function Login({ api, initialMode = "login" }) {
+  const [mode, setMode] = useState(initialMode);
   const [form, setForm] = useState({ hotelName: "Zynloc Demo", name: "Hotel Manager", email: "", password: "" });
   const [error, setError] = useState("");
   const [forgotMsg, setForgotMsg] = useState("");
@@ -4191,9 +4450,20 @@ function GuestFacilities({ facilities, gReq, show, lang }) {
 }
 
 function GuestNavigate({ waypoints, paths, floorPlans, lang, show }) {
+  const [from,  setFrom]  = useState("");
   const [dest,  setDest]  = useState("");
   const [route, setRoute] = useState(null);
   const [step,  setStep]  = useState(0);
+
+  // Default "from" to the entrance waypoint once waypoints are available
+  useEffect(() => {
+    if (!from && waypoints.length) {
+      const entrance = waypoints.find(w => w.is_entrance)
+                    || waypoints.find(w => /lobby|reception|entrance/i.test(w.name))
+                    || waypoints[0];
+      if (entrance) setFrom(entrance.id);
+    }
+  }, [waypoints]);
 
   const normPaths = paths.map(p => ({
     ...p,
@@ -4201,14 +4471,28 @@ function GuestNavigate({ waypoints, paths, floorPlans, lang, show }) {
       ? JSON.parse(p.control_points) : (p.control_points || []),
   }));
 
-  function doNavigate() {
-    if (!dest || !waypoints.length) { show(t(lang, "noNavigation"), "error"); return; }
-    const start = waypoints.find(w => w.is_entrance)
-               || waypoints.find(w => /lobby|reception|entrance/i.test(w.name))
-               || waypoints[0];
-    const result = findPath(waypoints, normPaths, start.id, dest);
+  function doNavigate(fromId, destId) {
+    const f = fromId || from;
+    const d = destId || dest;
+    if (!f || !d || !waypoints.length) { show(t(lang, "noNavigation"), "error"); return; }
+    if (f === d) { show("From and To must be different", "error"); return; }
+    const result = findPath(waypoints, normPaths, f, d);
     if (!result || !result.path.length) { show(t(lang, "noNavigation"), "error"); return; }
     setRoute(result); setStep(0);
+  }
+
+  function handleFromChange(e) {
+    const v = e.target.value;
+    setFrom(v);
+    setRoute(null);
+    setStep(0);
+  }
+
+  function handleDestChange(e) {
+    const v = e.target.value;
+    setDest(v);
+    setRoute(null);
+    setStep(0);
   }
 
   if (!waypoints.length) return (
@@ -4221,22 +4505,41 @@ function GuestNavigate({ waypoints, paths, floorPlans, lang, show }) {
   const currentWp = route ? waypoints.find(w => w.id === route.path[step]) : null;
   const currentFloor = currentWp
     ? floorPlans.find(f => f.id === currentWp.floor_plan_id)
-    : floorPlans[0];
+    : (from ? floorPlans.find(f => f.id === waypoints.find(w => w.id === from)?.floor_plan_id) : floorPlans[0]);
+
+  // Detect cross-floor route for a helpful label
+  const isCrossFloor = route && (() => {
+    const floors = new Set(route.path.map(id => waypoints.find(w => w.id === id)?.floor_plan_id));
+    return floors.size > 1;
+  })();
 
   return (
     <div className="guest-navigate">
       <h2 style={{ marginBottom: 12 }}>{t(lang, "navigate")}</h2>
 
-      {/* ── Destination picker ───────────────────────────────────── */}
-      <div className="nav-picker">
-        <select value={dest} onChange={e => { setDest(e.target.value); setRoute(null); }}>
-          <option value="">{t(lang, "selectDestination")}</option>
-          {waypoints.map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
-        </select>
-        <button className="primary" onClick={doNavigate} disabled={!dest}>
+      {/* ── From / To pickers ────────────────────────────────────── */}
+      <div className="nav-from-to">
+        <div className="nav-ft-row">
+          <label className="nav-ft-label">From</label>
+          <select className="nav-ft-select" value={from} onChange={handleFromChange}>
+            <option value="">Select starting point</option>
+            {waypoints.map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
+          </select>
+        </div>
+        <div className="nav-ft-row">
+          <label className="nav-ft-label">To</label>
+          <select className="nav-ft-select" value={dest} onChange={handleDestChange}>
+            <option value="">{t(lang, "selectDestination")}</option>
+            {waypoints.filter(wp => wp.id !== from).map(wp => <option key={wp.id} value={wp.id}>{wp.name}</option>)}
+          </select>
+        </div>
+        <button className="primary nav-go-btn" onClick={() => doNavigate()} disabled={!from || !dest}>
           <Navigation size={18} />Go
         </button>
       </div>
+      {isCrossFloor && (
+        <p className="nav-crossfloor-hint">Route goes through multiple floors — follow the step-by-step directions below</p>
+      )}
 
       {/* ── Floor plan with route overlay ────────────────────────── */}
       {currentFloor && (
