@@ -306,15 +306,35 @@ guestRouter.post("/:token/checkout-scan", requireValidQr, asyncHandler(async (re
 guestRouter.post("/:token/facility-scan", requireValidQr, asyncHandler(async (req, res) => {
   const { facilityToken } = z.object({ facilityToken: z.string() }).parse(req.body);
 
+  console.log(`[facility-scan] guestToken=${req.params.token} guestHotelId=${req.qr.hotel_id} status=${req.qr.status} facilityToken=${facilityToken}`);
+
   if (req.qr.status !== "current") {
     throw new HttpError(403, "Check-in required before accessing facilities");
   }
 
-  const fqr = (await query(
+  // Primary lookup: match token AND hotel_id
+  let fqr = (await query(
     "SELECT * FROM facility_qr_codes WHERE token = $1 AND hotel_id = $2",
     [facilityToken, req.qr.hotel_id]
   )).rows[0];
-  if (!fqr) throw new HttpError(404, "Unknown facility QR");
+
+  // Fallback: token-only lookup (handles existing QRs generated before hotel_id was added)
+  if (!fqr) {
+    const anyFqr = (await query(
+      "SELECT * FROM facility_qr_codes WHERE token = $1",
+      [facilityToken]
+    )).rows[0];
+    if (anyFqr) {
+      console.log(`[facility-scan] hotel_id mismatch — fqr.hotel_id=${anyFqr.hotel_id} guest.hotel_id=${req.qr.hotel_id} — using fqr`);
+      fqr = anyFqr;
+    }
+  }
+
+  if (!fqr) {
+    console.log(`[facility-scan] token=${facilityToken} NOT FOUND in facility_qr_codes`);
+    throw new HttpError(404, "Unknown facility QR");
+  }
+  console.log(`[facility-scan] found fqr id=${fqr.id} facility_id=${fqr.facility_id}`);
 
   const access = (await query(
     "SELECT included FROM facility_access WHERE booking_id = $1 AND facility_id = $2",

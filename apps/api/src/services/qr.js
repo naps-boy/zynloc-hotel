@@ -32,6 +32,8 @@ export async function rotateCheckinQr(bookingId) {
 }
 
 // ─── Static facility QR (printed, never rotates) ─────────────────────────────
+// URL includes ?hotel=HOTEL_ID so Samsung guests who open it without a session
+// can use the identification form to verify their booking.
 export async function ensureFacilityQr({ hotelId, facilityId }) {
   const existing = await query(
     "SELECT * FROM facility_qr_codes WHERE hotel_id = $1 AND facility_id = $2",
@@ -40,7 +42,7 @@ export async function ensureFacilityQr({ hotelId, facilityId }) {
   if (existing.rows.length) return existing.rows[0];
 
   const token = crypto.randomBytes(24).toString("base64url");
-  const url = `${config.clientUrl}/facility-scan/${token}`;
+  const url = `${config.clientUrl}/facility-scan/${token}?hotel=${hotelId}`;
   const qrDataUrl = await QRCode.toDataURL(url, QR_OPTS);
   const { rows } = await query(
     `INSERT INTO facility_qr_codes (hotel_id, facility_id, token, qr_data_url)

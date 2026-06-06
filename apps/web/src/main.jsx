@@ -794,70 +794,160 @@ function ScanReceptionPage({ scanToken, hotelId }) {
 }
 
 // ── ScanFacilityPage ──────────────────────────────────────────────────────────
-// Shown when Android native camera opens /facility-scan/:scanToken
+// Shown when a guest's camera opens /facility-scan/:scanToken?hotel=HOTEL_ID
+//
+// Flow A — guest already has sessionStorage token (opened booking link first):
+//   Immediately calls facility-scan API with stored guest token.
+// Flow B — no session (Samsung opened new tab):
+//   Shows identification form. Guest enters email → /api/guest/find → resolves
+//   guest token → calls facility-scan API.
 
-function ScanFacilityPage({ scanToken }) {
-  const [status,  setStatus]  = useState("loading"); // loading|granted|denied|error|no-session
+function ScanFacilityPage({ scanToken, hotelId }) {
+  const [resolvedToken, setResolvedToken] = useState(
+    () => sessionStorage.getItem("zynloc_guest_token") || null
+  );
+  const [status,  setStatus]  = useState("loading"); // loading|identify|checking|granted|denied|error
   const [result,  setResult]  = useState(null);
   const [errMsg,  setErrMsg]  = useState("");
-  const guestToken = sessionStorage.getItem("zynloc_guest_token");
+  const [email,   setEmail]   = useState("");
+  const [finding, setFinding] = useState(false);
+  const [findErr, setFindErr] = useState("");
 
-  useEffect(() => {
-    if (!guestToken) { setStatus("no-session"); return; }
-    fetch(`${API}/api/guest/${guestToken}/facility-scan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ facilityToken: scanToken })
-    }).then(async r => {
+  async function callFacilityScan(guestToken) {
+    setStatus("checking");
+    try {
+      const r = await fetch(`${API}/api/guest/${guestToken}/facility-scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ facilityToken: scanToken }),
+      });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "Failed");
       setResult(j);
       setStatus(j.result === "access_granted" ? "granted" : "denied");
-    }).catch(err => { setStatus("error"); setErrMsg(err.message); });
-  }, [scanToken]);
+    } catch (err) {
+      setStatus("error");
+      setErrMsg(err.message);
+    }
+  }
 
-  return (
-    <main style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center",
-                   justifyContent: "center", padding: 32, flexDirection: "column", gap: 16 }}>
-      {status === "loading" && <p className="muted">Checking access…</p>}
+  // Step 1: decide initial status on mount
+  useEffect(() => {
+    if (resolvedToken) {
+      callFacilityScan(resolvedToken);
+    } else {
+      setStatus("identify");
+    }
+  }, []); // run once on mount
 
-      {status === "no-session" && (
-        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
-          <p style={{ fontSize: 48 }}>🔑</p>
-          <h2 style={{ color: "var(--gold)" }}>Open Your Guest Link First</h2>
-          <p className="muted">Please open the booking link from your email, then scan this QR again.</p>
+  async function handleFindGuest(e) {
+    e.preventDefault();
+    if (!email.trim()) { setFindErr("Please enter your booking email address"); return; }
+    if (!hotelId) { setFindErr("Hotel information missing. Please scan the QR code again."); return; }
+    setFinding(true);
+    setFindErr("");
+    try {
+      const params = new URLSearchParams({ hotel: hotelId, email: email.trim() });
+      const r = await fetch(`${API}/api/guest/find?${params}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "Booking not found");
+      sessionStorage.setItem("zynloc_guest_token", j.token);
+      sessionStorage.setItem("zynloc_booking_id",  j.booking_id);
+      setResolvedToken(j.token);
+      await callFacilityScan(j.token);
+    } catch (err) {
+      setFindErr(err.message);
+    }
+    setFinding(false);
+  }
+
+  const S = { minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center",
+              justifyContent: "center", padding: 32, flexDirection: "column", gap: 16 };
+  const C = { textAlign: "center", maxWidth: 360, width: "100%", display: "flex",
+              flexDirection: "column", gap: 14, alignItems: "center" };
+
+  if (status === "loading" || status === "checking") return (
+    <main style={S}><p className="muted">Checking access…</p></main>
+  );
+
+  if (status === "identify") return (
+    <main style={S}>
+      <div style={{ ...C, alignItems: "stretch" }}>
+        <div style={{ textAlign: "center", marginBottom: 8 }}>
+          <p style={{ fontSize: 48, margin: 0 }}>🏊</p>
+          <h2 style={{ color: "var(--gold)", marginTop: 8 }}>Access Facility</h2>
+          <p className="muted" style={{ fontSize: 14 }}>
+            Please enter your booking email to verify access
+          </p>
         </div>
-      )}
-
-      {status === "granted" && (
-        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
-          <p style={{ fontSize: 64 }}>✅</p>
-          <h2 style={{ color: "var(--green)" }}>Access Granted</h2>
-          <p className="muted">{result?.facilityName} — welcome!</p>
-          <a className="secondary" href={`/guest/${guestToken}`}
-             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
-        </div>
-      )}
-
-      {status === "denied" && (
-        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
-          <p style={{ fontSize: 64 }}>🚫</p>
-          <h2 style={{ color: "var(--red)" }}>Access Denied</h2>
-          <p className="muted">{result?.facilityName} is not included in your package. Contact reception for assistance.</p>
-          <a className="secondary" href={`/guest/${guestToken}`}
-             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
-        </div>
-      )}
-
-      {status === "error" && (
-        <div className="stack" style={{ textAlign: "center", maxWidth: 320 }}>
-          <p style={{ fontSize: 48 }}>❌</p>
-          <p className="error">{errMsg}</p>
-          {guestToken && <a className="secondary" href={`/guest/${guestToken}`}
-             style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>}
-        </div>
-      )}
+        <form className="stack" onSubmit={handleFindGuest}>
+          <input
+            type="email"
+            placeholder="Your booking email address"
+            value={email}
+            onChange={e => { setEmail(e.target.value); setFindErr(""); }}
+            autoComplete="email"
+            autoFocus
+          />
+          {findErr && <p className="error" style={{ fontSize: 13 }}>{findErr}</p>}
+          <button className="primary" type="submit" disabled={finding}>
+            {finding
+              ? <><span style={{ width: 16, height: 16, borderRadius: "50%", border: "2px solid rgba(255,255,255,.3)",
+                                 borderTopColor: "#fff", animation: "spin .8s linear infinite",
+                                 display: "inline-block", marginRight: 8 }} /></>
+              : <><Check size={16} />Check My Access</>}
+          </button>
+        </form>
+        <p className="muted" style={{ fontSize: 12, textAlign: "center" }}>
+          Use the same email address from your booking confirmation.
+        </p>
+      </div>
     </main>
+  );
+
+  if (status === "error") return (
+    <main style={S}><div style={C}>
+      <p style={{ fontSize: 48 }}>❌</p>
+      <p className="error">{errMsg}</p>
+      <button className="ghost" onClick={() => { setStatus("identify"); setErrMsg(""); }}>
+        Try again
+      </button>
+      {resolvedToken && (
+        <a className="secondary" href={`/guest/${resolvedToken}`} style={{ textDecoration: "none" }}>
+          Go to my booking
+        </a>
+      )}
+    </div></main>
+  );
+
+  if (status === "granted") return (
+    <main style={S}><div style={C}>
+      <p style={{ fontSize: 64 }}>✅</p>
+      <h2 style={{ color: "var(--green)" }}>Access Granted</h2>
+      <p className="muted">{result?.facilityName} — welcome!</p>
+      {resolvedToken && (
+        <a className="secondary" href={`/guest/${resolvedToken}`}
+           style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
+      )}
+    </div></main>
+  );
+
+  // denied
+  return (
+    <main style={S}><div style={C}>
+      <p style={{ fontSize: 64 }}>🚫</p>
+      <h2 style={{ color: "var(--red)" }}>Access Denied</h2>
+      <p className="muted">
+        {result?.facilityName
+          ? `${result.facilityName} is not included in your package.`
+          : "This facility is not included in your package."}
+        {" "}Contact reception for assistance.
+      </p>
+      {resolvedToken && (
+        <a className="secondary" href={`/guest/${resolvedToken}`}
+           style={{ textDecoration: "none", marginTop: 8 }}>Back to my room</a>
+      )}
+    </div></main>
   );
 }
 
@@ -1358,7 +1448,7 @@ function App() {
   if (parts[0] === "guest"           && parts[1]) return <GuestApp token={parts[1]} />;
   if (parts[0] === "reception-scan"  && parts[1])
     return <ScanReceptionPage scanToken={parts[1]} hotelId={params.get("hotel")} />;
-  if (parts[0] === "facility-scan"   && parts[1]) return <ScanFacilityPage  scanToken={parts[1]} />;
+  if (parts[0] === "facility-scan"   && parts[1]) return <ScanFacilityPage  scanToken={parts[1]} hotelId={params.get("hotel")} />;
   if (parts[0] === "reset-password"  && params.get("token")) {
     return <ResetPassword resetToken={params.get("token")} />;
   }
@@ -3065,12 +3155,15 @@ function WaypointEditor({ wp, onSave, onDelete, onClose }) {
         <label className="upload-field-label">Photo guests see at this location (optional)</label>
         <ImageUpload value={form.photo} onChange={v => setForm(f => ({ ...f, photo: v }))} label="Update photo" maxWidth={800} />
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="primary" type="submit"><Check size={14} />Update</button>
+          <button className="primary" type="submit"><Check size={14} />Save Changes</button>
           <button type="button" className="ghost" style={{ color: "var(--red)" }}
             onClick={() => { if (window.confirm("Delete this waypoint?")) onDelete(wp.id); }}>
             <Trash2 size={14} />Delete
           </button>
         </div>
+        <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+          💡 Drag the waypoint circle on the map to reposition it
+        </p>
       </form>
     </div>
   );
@@ -3108,6 +3201,8 @@ function NavEditor({ api, show }) {
   const [addingFloor,  setAddingFloor] = useState(false);
   const [floorForm,    setFloorForm]   = useState({ name: "Ground Floor", number: 0, imageData: null });
   const [draggingCtrl, setDraggingCtrl] = useState(null);    // { pathId, ctrlIdx }
+  const [draggingWpId, setDraggingWpId] = useState(null);   // waypoint id being repositioned
+  const wasDraggedRef  = useRef(false);                      // distinguishes drag from click
   const svgRef = useRef(null);
 
   async function loadAll() {
@@ -3188,6 +3283,8 @@ function NavEditor({ api, show }) {
 
   function handleWpClick(e, wp) {
     e.stopPropagation();
+    // If this click ended a drag, suppress — it's not a real click
+    if (wasDraggedRef.current) { wasDraggedRef.current = false; return; }
     if (mode === "connect") {
       if (!connFirst) {
         setConnFirst(wp.id);
@@ -3200,6 +3297,18 @@ function NavEditor({ api, show }) {
       setPending(null);
       setSelPathId(null);
     }
+  }
+
+  function handleWpMouseDown(e, wp) {
+    // Only allow dragging in "place" mode, not connect mode
+    if (mode !== "place") return;
+    e.preventDefault();
+    e.stopPropagation();
+    wasDraggedRef.current = false;
+    setDraggingWpId(wp.id);
+    setSelWpId(wp.id);   // auto-select the waypoint so the editor panel appears
+    setPending(null);
+    setSelPathId(null);
   }
 
   async function createPath(fromId, toId) {
@@ -3296,31 +3405,60 @@ function NavEditor({ api, show }) {
   }
 
   function onSvgMouseMove(e) {
-    if (!draggingCtrl) return;
     const svg = svgRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const x = Math.max(0, Math.min(100, Math.round(((e.clientX - rect.left) / rect.width)  * 1000) / 10));
     const y = Math.max(0, Math.min(100, Math.round(((e.clientY - rect.top)  / rect.height) * 1000) / 10));
-    setPaths(prev => prev.map(p => {
-      if (p.id !== draggingCtrl.pathId) return p;
-      const cps = [...(p.control_points || [])];
-      cps[draggingCtrl.ctrlIdx] = { x, y };
-      return { ...p, control_points: cps };
-    }));
+
+    if (draggingCtrl) {
+      setPaths(prev => prev.map(p => {
+        if (p.id !== draggingCtrl.pathId) return p;
+        const cps = [...(p.control_points || [])];
+        cps[draggingCtrl.ctrlIdx] = { x, y };
+        return { ...p, control_points: cps };
+      }));
+    }
+
+    if (draggingWpId) {
+      wasDraggedRef.current = true;
+      setWaypoints(prev => prev.map(w =>
+        w.id === draggingWpId ? { ...w, x_percent: x, y_percent: y } : w
+      ));
+    }
   }
 
-  async function endDragCtrl() {
-    if (!draggingCtrl) return;
-    const path = paths.find(p => p.id === draggingCtrl.pathId);
-    if (path) {
-      const rev = paths.find(p => p.from_waypoint_id === path.to_waypoint_id && p.to_waypoint_id === path.from_waypoint_id);
-      try {
-        await api.request(`/api/navigation/paths/${path.id}`, { method: "PUT", body: JSON.stringify({ controlPoints: path.control_points || [] }) });
-        if (rev) await api.request(`/api/navigation/paths/${rev.id}`, { method: "PUT", body: JSON.stringify({ controlPoints: path.control_points || [] }) });
-      } catch (err) { show(err.message, "error"); }
+  async function onSvgMouseUp() {
+    // Save control-point drag
+    if (draggingCtrl) {
+      const path = paths.find(p => p.id === draggingCtrl.pathId);
+      if (path) {
+        const rev = paths.find(p => p.from_waypoint_id === path.to_waypoint_id && p.to_waypoint_id === path.from_waypoint_id);
+        try {
+          await api.request(`/api/navigation/paths/${path.id}`, { method: "PUT", body: JSON.stringify({ controlPoints: path.control_points || [] }) });
+          if (rev) await api.request(`/api/navigation/paths/${rev.id}`, { method: "PUT", body: JSON.stringify({ controlPoints: path.control_points || [] }) });
+        } catch (err) { show(err.message, "error"); }
+      }
+      setDraggingCtrl(null);
     }
-    setDraggingCtrl(null);
+
+    // Save waypoint position drag
+    if (draggingWpId && wasDraggedRef.current) {
+      const wp = waypoints.find(w => w.id === draggingWpId);
+      if (wp) {
+        try {
+          await api.request(`/api/navigation/waypoints/${wp.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ xPercent: wp.x_percent, yPercent: wp.y_percent }),
+          });
+          // show("Waypoint repositioned", "success");
+        } catch (err) {
+          show(err.message, "error");
+          await loadAll(); // revert to server state on error
+        }
+      }
+    }
+    setDraggingWpId(null);
   }
 
   const selWp   = waypoints.find(w => w.id === selWpId);
@@ -3401,7 +3539,7 @@ function NavEditor({ api, show }) {
             style={{ cursor: mode === "place" ? "crosshair" : mode === "connect" ? "pointer" : "default", userSelect: "none" }}>
             <img src={floor.image_data} alt={floor.floor_name} className="nav-plan-img" draggable={false} />
             <svg ref={svgRef} className="nav-plan-svg" viewBox="0 0 100 100" preserveAspectRatio="none"
-              onMouseMove={onSvgMouseMove} onMouseUp={endDragCtrl} onMouseLeave={endDragCtrl}>
+              onMouseMove={onSvgMouseMove} onMouseUp={onSvgMouseUp} onMouseLeave={onSvgMouseUp}>
 
               {/* Paths */}
               {uniquePaths.map(p => {
@@ -3438,9 +3576,16 @@ function NavEditor({ api, show }) {
                 const color      = WP_COLORS[wp.waypoint_type] || "#d8a84f";
                 const isSelected = selWpId === wp.id;
                 const isFirst    = connFirst === wp.id;
+                const isDraggingThis = draggingWpId === wp.id;
+                const wpCursor = mode === "connect" ? "pointer"
+                               : isDraggingThis     ? "grabbing"
+                               : isSelected         ? "grab"
+                               : "pointer";
                 return (
-                  <g key={wp.id} className="wp-dot" style={{ cursor: "pointer", pointerEvents: "all" }}
-                    onClick={e => handleWpClick(e, wp)}>
+                  <g key={wp.id} className="wp-dot"
+                    style={{ cursor: wpCursor, pointerEvents: "all" }}
+                    onClick={e => handleWpClick(e, wp)}
+                    onMouseDown={e => handleWpMouseDown(e, wp)}>
                     {wp.is_entrance && (
                       <circle cx={wp.x_percent} cy={wp.y_percent} r="4.5"
                         fill="none" stroke="#26c281" strokeWidth="0.5" opacity="0.6" />
