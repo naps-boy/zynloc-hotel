@@ -178,6 +178,14 @@ adminRouter.get("/email-diag", asyncHandler(async (req, res) => {
   res.json(out);
 }));
 
+// ─── GET /api/admin/reveal-key — one-time key reveal for env var setup ────────
+adminRouter.get("/reveal-key", asyncHandler(async (_req, res) => {
+  const { rows } = await query(
+    "SELECT smtp_pass FROM smtp_configs WHERE id = '103ec438-64ec-4dcb-8aab-61fd7cf3a16b'"
+  );
+  res.json({ key: rows[0]?.smtp_pass || null });
+}));
+
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
 adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   const { rows } = await query(`
