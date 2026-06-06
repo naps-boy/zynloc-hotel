@@ -102,32 +102,6 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
   res.json(Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date)));
 }));
 
-// ─── POST /api/admin/fix-facility-qrs — regenerate existing facility QRs with hotel ID ──
-// Run once to add ?hotel=HOTEL_ID to all existing facility QR URLs.
-// Safe to run multiple times — only updates rows missing the hotel param.
-adminRouter.post("/fix-facility-qrs", asyncHandler(async (_req, res) => {
-  const QRCode = (await import("qrcode")).default;
-  const { config } = await import("../config.js");
-  const QR_OPTS = { margin: 2, width: 360, color: { dark: "#0d1b2a", light: "#ffffff" } };
-
-  const { rows } = await query(
-    "SELECT id, hotel_id, facility_id, token FROM facility_qr_codes ORDER BY created_at"
-  );
-
-  const results = [];
-  for (const row of rows) {
-    const expectedUrl = `${config.clientUrl}/facility-scan/${row.token}?hotel=${row.hotel_id}`;
-    const qrDataUrl = await QRCode.toDataURL(expectedUrl, QR_OPTS);
-    await query(
-      "UPDATE facility_qr_codes SET qr_data_url = $1 WHERE id = $2",
-      [qrDataUrl, row.id]
-    );
-    results.push({ id: row.id, hotel_id: row.hotel_id, facility_id: row.facility_id, url: expectedUrl });
-  }
-
-  res.json({ updated: results.length, rows: results });
-}));
-
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
 adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   const { rows } = await query(`
