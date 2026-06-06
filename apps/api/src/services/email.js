@@ -4,17 +4,36 @@ import { config } from "../config.js";
 
 // ── SMTP config lookup ────────────────────────────────────────────────────────
 
+// Validate that a Brevo config has a real key (89-char xkeysib- format).
+// Some test hotels have truncated/bad keys from early dev — skip those.
+function isValidBrevoKey(smtp_pass) {
+  const k = (smtp_pass || "").trim();
+  return k.length >= 60 && k.startsWith("xkeysib-");
+}
+
 export async function getHotelSmtpConfig(hotelId) {
   // 1. Try hotel-specific default config
   const { rows } = await query(
     "SELECT * FROM smtp_configs WHERE hotel_id = $1 AND is_default = TRUE LIMIT 1",
     [hotelId]
   );
-  if (rows[0]) return rows[0];
+  if (rows[0]) {
+    const cfg = rows[0];
+    // Validate Brevo keys — bad keys (truncated, wrong format) silently fail; skip them
+    if (cfg.provider === "brevo" && !isValidBrevoKey(cfg.smtp_pass)) {
+      console.warn(`[Email:getHotelSmtpConfig] hotel ${hotelId} has invalid Brevo key (len=${(cfg.smtp_pass||"").length}) — falling back to platform config`);
+    } else if (cfg.provider !== "brevo") {
+      // Non-Brevo (Gmail/SMTP) configs: return as-is
+      return cfg;
+    } else {
+      // Valid Brevo key
+      return cfg;
+    }
+  }
 
   // 2. Env-var override (BREVO_API_KEY set on Render)
-  if (config.brevoApiKey) {
-    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no config — using env BREVO_API_KEY`);
+  if (config.brevoApiKey && isValidBrevoKey(config.brevoApiKey)) {
+    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} — using env BREVO_API_KEY`);
     return {
       id:          "platform-brevo-env",
       provider:    "brevo",
@@ -25,18 +44,16 @@ export async function getHotelSmtpConfig(hotelId) {
     };
   }
 
-  // 3. Last resort — reuse the platform's known-good default Brevo config directly.
-  //    Query for is_default=TRUE Brevo configs across all hotels, oldest first
-  //    (the testfix/platform hotel's config is oldest and guaranteed to work).
+  // 3. Last resort — reuse the platform's oldest valid Brevo config from DB.
   const { rows: anyRows } = await query(
-    "SELECT * FROM smtp_configs WHERE provider = 'brevo' AND is_default = TRUE ORDER BY created_at LIMIT 1"
+    "SELECT * FROM smtp_configs WHERE provider = 'brevo' AND is_default = TRUE AND LENGTH(smtp_pass) >= 60 AND smtp_pass LIKE 'xkeysib-%' ORDER BY created_at LIMIT 1"
   );
   if (anyRows[0]) {
-    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} has no config — sharing platform Brevo config (hotel ${anyRows[0].hotel_id})`);
+    console.log(`[Email:getHotelSmtpConfig] hotel ${hotelId} — sharing platform Brevo config (hotel ${anyRows[0].hotel_id})`);
     return anyRows[0];
   }
 
-  console.warn(`[Email:getHotelSmtpConfig] hotel ${hotelId} — no SMTP config found anywhere`);
+  console.warn(`[Email:getHotelSmtpConfig] hotel ${hotelId} — no valid SMTP config found`);
   return null;
 }
 
@@ -87,12 +104,19 @@ async function sendViaBrevo(cfg, mailOpts) {
     body: JSON.stringify(body),
   });
 
-  // If primary veltaforge.com sender fails (domain not yet verified), fall back to Gmail
+  // Handle first-attempt failures
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
-    console.log(`[Brevo] HTTP ${res.status} response:`, JSON.stringify(errBody));
-    if (errBody?.message?.includes("sender") || res.status === 400) {
-      console.log("[Email] Primary sender failed, using fallback Gmail sender");
+    console.log(`[Brevo] HTTP ${res.status} first-attempt response:`, JSON.stringify(errBody));
+
+    if (res.status === 401 || res.status === 403) {
+      // API key invalid — do NOT fall back, just throw so caller knows the config is bad
+      throw new Error(`Brevo auth failed (${res.status}) — API key invalid: ${errBody.message || ""}`);
+    }
+
+    if (errBody?.message?.toLowerCase().includes("sender") || res.status === 400) {
+      // Sender not verified — fall back to known-good Gmail sender
+      console.log("[Email] Primary sender rejected, retrying with fallback Gmail sender");
       body.sender  = fallbackSender;
       body.headers["List-Unsubscribe"] = `<mailto:${fallbackSender.email}?subject=unsubscribe>`;
       res = await fetch("https://api.brevo.com/v3/smtp/email", {
