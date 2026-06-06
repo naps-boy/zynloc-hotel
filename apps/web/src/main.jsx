@@ -3178,14 +3178,14 @@ function WaypointEditor({ wp, onSave, onDelete, onClose }) {
   }
 
   return (
-    <div className="panel stack" style={{ borderColor: "var(--gold)" }}>
+    <div className="panel stack" style={{ borderColor: "var(--gold)", minWidth: 260 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 style={{ margin: 0 }}>Edit Waypoint</h3>
         <button className="icon-btn" onClick={onClose}><X size={14} /></button>
       </div>
       <form className="stack" onSubmit={handleSave}>
         <div style={{ display: "flex", gap: 8 }}>
-          <input required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} style={{ flex: 1 }} />
+          <input required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} style={{ flex: 1, fontSize: '16px', padding: '10px 12px', height: '44px', width: '100%' }} />
           <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
             <option value="junction">Junction</option>
             <option value="entrance">Entrance</option>
@@ -4621,8 +4621,10 @@ function GuestFacilities({ facilities, gReq, show, lang }) {
       } catch { /* not a URL — use raw value as token */ }
       console.log("[GuestFacilities] scanned:", qrData, "→ facilityToken:", facilityToken);
       const result = await gReq("/facility-scan", { method: "POST", body: { facilityToken } });
+      console.log("[GuestFacilities] API response:", result);
       setAccessResult(result);
-      show(result.granted ? t(lang, "accessGranted") : t(lang, "accessDenied"), result.granted ? "success" : "error");
+      const granted = result.result === "access_granted";
+      show(granted ? t(lang, "accessGranted") : t(lang, "accessDenied"), granted ? "success" : "error");
     } catch (err) { show(err.message, "error"); }
   }
 
@@ -4647,10 +4649,10 @@ function GuestFacilities({ facilities, gReq, show, lang }) {
       </button>
       {scanning && <QrScanner onScan={handleScan} onClose={() => setScanning(false)} bookings={[]} />}
       {accessResult && (
-        <div className={`access-result ${accessResult.granted ? "granted" : "denied"}`}>
-          {accessResult.granted ? <CheckCircle size={44} /> : <XCircle size={44} />}
-          <strong>{accessResult.granted ? t(lang, "accessGranted") : t(lang, "accessDenied")}</strong>
-          <p>{accessResult.granted ? t(lang, "enjoyVisit") : t(lang, "notInPackage")}</p>
+        <div className={`access-result ${accessResult.result === "access_granted" ? "granted" : "denied"}`}>
+          {accessResult.result === "access_granted" ? <CheckCircle size={44} /> : <XCircle size={44} />}
+          <strong>{accessResult.result === "access_granted" ? t(lang, "accessGranted") : t(lang, "accessDenied")}</strong>
+          <p>{accessResult.result === "access_granted" ? t(lang, "enjoyVisit") : t(lang, "notInPackage")}</p>
           <button className="ghost" onClick={() => setAccessResult(null)}><X size={15} /></button>
         </div>
       )}
