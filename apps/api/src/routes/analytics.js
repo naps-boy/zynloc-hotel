@@ -11,7 +11,7 @@ analyticsRouter.get("/", asyncHandler(async (req, res) => {
   const [rooms, bookings, scans] = await Promise.all([
     query("SELECT id, number, type FROM rooms WHERE hotel_id = $1", [hotelId]),
     query(
-      `SELECT b.*, r.number room_number, r.type room_type
+      `SELECT b.*, r.number room_number, r.type room_type, r.price_per_night
          FROM bookings b JOIN rooms r ON r.id = b.room_id
         WHERE b.hotel_id = $1 AND b.status <> 'cancelled'`,
       [hotelId]
@@ -33,9 +33,12 @@ analyticsRouter.get("/", asyncHandler(async (req, res) => {
   for (const booking of bookings.rows) {
     const month = new Date(booking.check_in).toISOString().slice(0, 7);
     byMonth.set(month, (byMonth.get(month) || 0) + 1);
-    revenueByRoom.set(booking.room_number, (revenueByRoom.get(booking.room_number) || 0) + Number(booking.amount || 0));
+    const nights = Math.max(1, Math.ceil((new Date(booking.check_out) - new Date(booking.check_in)) / 86400000));
+    const roomRevenue    = Number(booking.price_per_night || 0) * nights;
+    const packageRevenue = Number(booking.amount || 0);
+    revenueByRoom.set(booking.room_number, (revenueByRoom.get(booking.room_number) || 0) + roomRevenue + packageRevenue);
     roomTypes.set(booking.room_type, (roomTypes.get(booking.room_type) || 0) + 1);
-    totalNights += Math.max(1, Math.ceil((new Date(booking.check_out) - new Date(booking.check_in)) / 86400000));
+    totalNights += nights;
   }
 
   const facilityCounts = new Map();

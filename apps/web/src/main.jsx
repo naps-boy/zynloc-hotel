@@ -2679,18 +2679,64 @@ function MgrServiceRequests({ api, data, reload, show }) {
 }
 
 function MgrAccessLog({ data }) {
+  const log = data.accessLog || [];
   return (
-    <div className="table wide-table">
-      {data.accessLog.map(entry => (
-        <div className="row" key={entry.id}>
-          <span>{entry.guest_name}</span>
-          <span>{entry.facility_name}</span>
-          <span className={`pill ${entry.result}`}>{entry.result}</span>
-          <span>{new Date(entry.scanned_at).toLocaleString()}</span>
+    <section className="panel stack">
+      <h2 style={{ margin: 0 }}>Access Log</h2>
+      <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+        Facility scan history — most recent first
+      </p>
+      {log.length === 0 ? (
+        <p className="muted" style={{ padding: "24px 0", textAlign: "center" }}>
+          No access events yet. Guests will appear here after scanning a facility QR.
+        </p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--muted)" }}>
+                {["Time", "Guest", "Facility", "Result"].map(h => (
+                  <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {log.map(entry => (
+                <tr key={entry.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "10px 12px", color: "var(--muted)", whiteSpace: "nowrap" }}>
+                    {formatMessageTime(entry.created_at)}
+                  </td>
+                  <td style={{ padding: "10px 12px", fontWeight: 600 }}>
+                    {entry.guest_name || <span style={{ color: "var(--muted)" }}>Unknown</span>}
+                    {entry.room_number && (
+                      <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12, marginLeft: 6 }}>
+                        Rm {entry.room_number}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: "10px 12px" }}>
+                    {entry.facility_name || <span style={{ color: "var(--muted)" }}>—</span>}
+                  </td>
+                  <td style={{ padding: "10px 12px" }}>
+                    {entry.result === "access_granted" ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                                     color: "var(--green)", fontWeight: 600, fontSize: 12 }}>
+                        <CheckCircle size={13} /> Granted
+                      </span>
+                    ) : (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                                     color: "var(--red)", fontWeight: 600, fontSize: 12 }}>
+                        <XCircle size={13} /> Denied
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      ))}
-      {!data.accessLog.length && <p className="muted">No access events yet</p>}
-    </div>
+      )}
+    </section>
   );
 }
 
@@ -3192,7 +3238,7 @@ function NavEditor({ api, show }) {
   const [waypoints,    setWaypoints]   = useState([]);
   const [paths,        setPaths]       = useState([]);
   const [floorId,      setFloorId]     = useState(null);
-  const [mode,         setMode]        = useState("place");  // "place" | "connect"
+  const [mode,         setMode]        = useState("place");  // "place" | "connect" | "edit"
   const [pending,      setPending]     = useState(null);     // { x, y } % for new waypoint
   const [connFirst,    setConnFirst]   = useState(null);     // waypoint id
   const [selWpId,      setSelWpId]     = useState(null);
@@ -3300,8 +3346,8 @@ function NavEditor({ api, show }) {
   }
 
   function handleWpMouseDown(e, wp) {
-    // Only allow dragging in "place" mode, not connect mode
-    if (mode !== "place") return;
+    // Allow dragging in "place" mode and "edit" mode, not connect mode
+    if (mode !== "place" && mode !== "edit") return;
     e.preventDefault();
     e.stopPropagation();
     wasDraggedRef.current = false;
@@ -3510,12 +3556,16 @@ function NavEditor({ api, show }) {
         <div className="panel" style={{ padding: "10px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span className="muted" style={{ fontSize: 13 }}>Tool:</span>
           <button className={mode === "place" ? "primary sm" : "ghost sm"}
-            onClick={() => { setMode("place"); setConnFirst(null); }}>
+            onClick={() => { setMode("place"); setConnFirst(null); setSelWpId(null); }}>
             <MapPin size={14} /> Place Waypoint
           </button>
           <button className={mode === "connect" ? "primary sm" : "ghost sm"}
-            onClick={() => { setMode("connect"); setPending(null); }}>
+            onClick={() => { setMode("connect"); setPending(null); setSelWpId(null); }}>
             <Navigation size={14} /> Connect
+          </button>
+          <button className={mode === "edit" ? "primary sm" : "ghost sm"}
+            onClick={() => { setMode("edit"); setPending(null); setConnFirst(null); }}>
+            <Settings size={14} /> Edit Waypoints
           </button>
           <button className="ghost sm" style={{ marginLeft: "auto", color: "var(--red)" }}
             onClick={() => deleteFloor(floorId)}>
@@ -3536,7 +3586,7 @@ function NavEditor({ api, show }) {
         <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
           <div className="nav-plan-container"
             onClick={handleCanvasClick}
-            style={{ cursor: mode === "place" ? "crosshair" : mode === "connect" ? "pointer" : "default", userSelect: "none" }}>
+            style={{ cursor: mode === "place" ? "crosshair" : mode === "connect" ? "pointer" : mode === "edit" ? "default" : "default", userSelect: "none" }}>
             <img src={floor.image_data} alt={floor.floor_name} className="nav-plan-img" draggable={false} />
             <svg ref={svgRef} className="nav-plan-svg" viewBox="0 0 100 100" preserveAspectRatio="none"
               onMouseMove={onSvgMouseMove} onMouseUp={onSvgMouseUp} onMouseLeave={onSvgMouseUp}>
@@ -3578,8 +3628,10 @@ function NavEditor({ api, show }) {
                 const isFirst    = connFirst === wp.id;
                 const isDraggingThis = draggingWpId === wp.id;
                 const wpCursor = mode === "connect" ? "pointer"
-                               : isDraggingThis     ? "grabbing"
-                               : isSelected         ? "grab"
+                               : isDraggingThis                   ? "grabbing"
+                               : (mode === "edit" && isSelected)  ? "grab"
+                               : mode === "edit"                  ? "pointer"
+                               : isSelected                       ? "grab"
                                : "pointer";
                 return (
                   <g key={wp.id} className="wp-dot"
@@ -4556,7 +4608,19 @@ function GuestFacilities({ facilities, gReq, show, lang }) {
   async function handleScan(qrData) {
     setScanning(false);
     try {
-      const result = await gReq("/facility-scan", { method: "POST", body: { facilityToken: qrData } });
+      // nimiq/qr-scanner returns the full URL encoded in the QR, e.g.
+      // https://veltaforge.com/facility-scan/TOKEN?hotel=HOTEL_ID
+      // Extract just the TOKEN portion so the API lookup works correctly.
+      let facilityToken = qrData;
+      try {
+        const url = new URL(qrData);
+        const pathParts = url.pathname.split("/").filter(Boolean);
+        if (pathParts[0] === "facility-scan" && pathParts[1]) {
+          facilityToken = pathParts[1];
+        }
+      } catch { /* not a URL — use raw value as token */ }
+      console.log("[GuestFacilities] scanned:", qrData, "→ facilityToken:", facilityToken);
+      const result = await gReq("/facility-scan", { method: "POST", body: { facilityToken } });
       setAccessResult(result);
       show(result.granted ? t(lang, "accessGranted") : t(lang, "accessDenied"), result.granted ? "success" : "error");
     } catch (err) { show(err.message, "error"); }
