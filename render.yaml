@@ -19,3 +19,9 @@ services:
         value: ZynlocAdmin2026!
       - key: MAIL_FROM
         value: "Zynloc Hotel <zynloc@veltaforge.com>"
+      - key: GOOGLE_CLIENT_ID
+        value: PLACEHOLDER_REPLACE_WITH_REAL
+      - key: GOOGLE_CLIENT_SECRET
+        value: PLACEHOLDER_REPLACE_WITH_REAL
+      - key: GOOGLE_REDIRECT_URI
+        value: https://zynloc-hotel-api.onrender.com/api/gmail/callback

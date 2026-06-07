@@ -19,6 +19,10 @@ export const config = {
   brevoApiKey:     process.env.BREVO_API_KEY     || "",
   brevoSenderEmail: process.env.BREVO_SENDER_EMAIL || "mehnapoelionfuh@11297397.brevosend.com",
   brevoSenderName:  process.env.BREVO_SENDER_NAME  || "Zynloc Hotel",
+  // Google OAuth — for Gmail integration
+  googleClientId:     process.env.GOOGLE_CLIENT_ID     || "",
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+  googleRedirectUri:  process.env.GOOGLE_REDIRECT_URI  || "https://zynloc-hotel-api.onrender.com/api/gmail/callback",
 };
 
 export function requireEnv() {

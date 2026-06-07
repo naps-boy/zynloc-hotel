@@ -4094,6 +4094,184 @@ function NavEditor({ api, show }) {
   );
 }
 
+// ── GmailIntegrationCard ──────────────────────────────────────────────────────
+function GmailIntegrationCard({ api, show }) {
+  const [status,      setStatus]      = useState(null);   // null=loading
+  const [scanning,    setScanning]    = useState(false);
+  const [scanResults, setScanResults] = useState(null);
+  const [importing,   setImporting]   = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  useEffect(() => {
+    api.request("/api/gmail/status")
+       .then(setStatus)
+       .catch(() => setStatus({ connected: false }));
+  }, []);
+
+  // Detect ?gmail_connected or ?gmail_error after OAuth redirect
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("gmail_connected") === "true") {
+      // Re-fetch status to confirm connection, then clean URL
+      api.request("/api/gmail/status").then(setStatus).catch(() => {});
+      window.history.replaceState({}, "", window.location.hash || "/");
+      show("Gmail connected successfully!", "success");
+    } else if (params.get("gmail_error") === "true") {
+      window.history.replaceState({}, "", window.location.hash || "/");
+      show("Gmail connection failed. Please try again.", "error");
+    }
+  }, []);
+
+  async function handleConnect() {
+    try {
+      const { url } = await api.request("/api/gmail/auth-url");
+      window.location.href = url;
+    } catch (err) { show(err.message, "error"); }
+  }
+
+  async function handleDisconnect() {
+    setDisconnecting(true);
+    try {
+      await api.request("/api/gmail/disconnect", { method: "DELETE" });
+      setStatus({ connected: false });
+      setScanResults(null);
+      show("Gmail disconnected", "success");
+    } catch (err) { show(err.message, "error"); }
+    finally { setDisconnecting(false); }
+  }
+
+  async function handleScan() {
+    setScanning(true);
+    setScanResults(null);
+    try {
+      const result = await api.request("/api/gmail/scan", { method: "POST" });
+      setScanResults(result);
+      if (result.found === 0) show("No new booking emails found in the last 30 days.", "info");
+    } catch (err) { show(err.message, "error"); }
+    finally { setScanning(false); }
+  }
+
+  async function handleConfirmImport(bookings) {
+    setImporting(true);
+    try {
+      const result = await api.request("/api/gmail/confirm-import", {
+        method: "POST",
+        body: JSON.stringify({ bookings }),
+      });
+      show(`${result.created} booking${result.created !== 1 ? "s" : ""} created successfully`, "success");
+      setScanResults(null);
+    } catch (err) { show(err.message, "error"); }
+    finally { setImporting(false); }
+  }
+
+  // Loading
+  if (status === null) {
+    return (
+      <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px",
+                    background: "var(--surface)", color: "var(--muted)", fontSize: 13 }}>
+        Loading Gmail status…
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px",
+                  display: "flex", flexDirection: "column", gap: 16, background: "var(--surface)" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 8, background: "#fff", flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      border: "1px solid var(--border)", fontSize: 22 }}>✉️</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <strong style={{ fontSize: 15 }}>Gmail Integration</strong>
+            {status.connected && (
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
+                             background: "#dcfce7", color: "#166534", textTransform: "uppercase" }}>
+                Connected
+              </span>
+            )}
+          </div>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+            {status.connected
+              ? `Scanning ${status.email} for booking confirmation emails.`
+              : "Connect your Gmail inbox to auto-import bookings from Airbnb, Booking.com, and Expedia."}
+          </p>
+        </div>
+      </div>
+
+      {/* Feature chips */}
+      {!status.connected && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12, color: "var(--muted)" }}>
+          {["Airbnb","Booking.com","Expedia","VRBO"].map(p => (
+            <span key={p} style={{ background: "var(--bg)", padding: "3px 8px",
+                                   borderRadius: 4, border: "1px solid var(--border)" }}>
+              📧 {p}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Actions */}
+      {!status.connected ? (
+        <button className="primary" style={{ alignSelf: "flex-start" }} onClick={handleConnect}>
+          Connect Gmail
+        </button>
+      ) : (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="primary" onClick={handleScan} disabled={scanning}>
+            {scanning ? "Scanning inbox…" : "Scan for New Bookings"}
+          </button>
+          <button className="ghost" onClick={handleDisconnect} disabled={disconnecting}>
+            {disconnecting ? "Disconnecting…" : "Disconnect"}
+          </button>
+        </div>
+      )}
+
+      {/* Scan results */}
+      {scanResults && (
+        <div className="stack" style={{ gap: 10 }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>
+            {scanResults.found > 0
+              ? `Found ${scanResults.found} new booking email${scanResults.found !== 1 ? "s" : ""}`
+              : "No new booking emails found in the last 30 days."}
+          </div>
+
+          {scanResults.bookings.map((b, i) => (
+            <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 8,
+                                  padding: "12px 14px", display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <strong style={{ fontSize: 14 }}>{b.guest_name}</strong>
+                <SourceBadge source={b.source} />
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                {b.check_in && b.check_out
+                  ? `${b.check_in} → ${b.check_out}`
+                  : b.check_in || "Dates not parsed"}
+                {b.guest_email && <span style={{ marginLeft: 10 }}>{b.guest_email}</span>}
+              </div>
+              {b.subject && (
+                <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>
+                  {b.subject.slice(0, 80)}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {scanResults.found > 0 && (
+            <button className="primary" onClick={() => handleConfirmImport(scanResults.bookings)}
+                    disabled={importing}>
+              {importing
+                ? "Creating bookings…"
+                : `Import All ${scanResults.found} Booking${scanResults.found !== 1 ? "s" : ""}`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
   const s = data.settings || {};
   const [form, setForm] = useState({
@@ -4103,7 +4281,14 @@ function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
     kycDocuments: s.kyc_documents || [],
   });
   const [customDoc, setCustomDoc] = useState("");
-  const [tab, setTab] = useState("brand");
+  // Auto-switch to integrations tab when returning from Gmail OAuth
+  const [tab, setTab] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("gmail_connected") === "true" || params.get("gmail_error") === "true") {
+      return "integrations";
+    }
+    return "brand";
+  });
   const [checkoutQr, setCheckoutQr] = useState(s.checkout_qr || null);
   const [receptionQr, setReceptionQr] = useState(null);
   const [receptionExpiry, setReceptionExpiry] = useState(null);
@@ -4454,44 +4639,7 @@ function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
         <div className="stack">
           <h2>Integrations</h2>
           <p className="muted">Connect external services to automate booking imports and enhance your workflow.</p>
-
-          {/* Gmail Integration Card */}
-          <div style={{
-            border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px",
-            display: "flex", flexDirection: "column", gap: 12,
-            background: "var(--surface)",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 8, background: "#fff",
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            border: "1px solid var(--border)", fontSize: 22 }}>
-                ✉️
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <strong style={{ fontSize: 15 }}>Gmail Integration</strong>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
-                                 background: "#fef3c7", color: "#92400e", textTransform: "uppercase",
-                                 letterSpacing: "0.05em" }}>
-                    Coming Soon
-                  </span>
-                </div>
-                <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
-                  Connect your Gmail inbox to automatically import booking confirmations from Airbnb, Booking.com, and other platforms.
-                </p>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12, color: "var(--muted)" }}>
-              <span style={{ background: "var(--bg)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>📧 Auto-import from Airbnb</span>
-              <span style={{ background: "var(--bg)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>📧 Auto-import from Booking.com</span>
-              <span style={{ background: "var(--bg)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>📧 Auto-import from Expedia</span>
-            </div>
-            <button className="primary" disabled style={{ opacity: 0.5, cursor: "not-allowed", alignSelf: "flex-start" }}>
-              Connect Gmail
-            </button>
-          </div>
-
-          {/* Placeholder for future integrations */}
+          <GmailIntegrationCard api={api} show={show} />
           <div style={{
             border: "1px dashed var(--border)", borderRadius: 12, padding: "20px 24px",
             display: "flex", alignItems: "center", gap: 12, color: "var(--muted)", fontSize: 13,
