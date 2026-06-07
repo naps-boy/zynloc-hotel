@@ -20,8 +20,9 @@ const bookingSchema = z.object({
   packageType:  z.string().default("standard"),
   checkIn:      z.coerce.date(),
   checkOut:     z.coerce.date(),
-  facilityIds:  z.array(z.string().uuid()).default([]),
-  specialNotes: z.string().optional().default("")
+  facilityIds:   z.array(z.string().uuid()).default([]),
+  specialNotes:  z.string().optional().default(""),
+  bookingSource: z.string().optional().default("manual"),
 });
 
 bookingsRouter.get("/", asyncHandler(async (req, res) => {

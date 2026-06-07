@@ -7,9 +7,9 @@ import {
 } from "recharts";
 import {
   AlertTriangle, BarChart3, BedDouble, Bell, CalendarDays, Camera,
-  Check, CheckCircle, ChevronRight, DoorOpen, Dumbbell, FileDown,
+  Check, CheckCircle, ChevronRight, DoorOpen, Download, Dumbbell, FileDown,
   Globe, Hotel, LogOut, MapPin, Menu, MessageSquare, Monitor, Navigation, PhoneCall,
-  Plus, QrCode, Send, Settings, ShieldCheck, Sparkles, Star, Trash2, Truck,
+  Plus, QrCode, Search, Send, Settings, ShieldCheck, Sparkles, Star, Trash2, Truck,
   Upload, Users, X, XCircle, Zap, ZoomIn
 } from "lucide-react";
 import { io } from "socket.io-client";
@@ -37,9 +37,20 @@ function useApi() {
     if (res.status === 204) return null;
     return res.json();
   }
+  // requestRaw — for FormData (no Content-Type header, browser sets it with boundary)
+  async function requestRaw(path, opts = {}) {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`${API}${path}`, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      if (res.status === 401) { localStorage.removeItem("zynloc_token"); setToken(""); }
+      throw new Error(b.error || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
   function saveToken(t) { localStorage.setItem("zynloc_token", t); setToken(t); }
   function logout() { localStorage.removeItem("zynloc_token"); setToken(""); }
-  return { token, request, saveToken, logout };
+  return { token, request, requestRaw, saveToken, logout };
 }
 
 function useToast() {
@@ -2080,7 +2091,7 @@ function ManagerDashboard({ api, initialSettings }) {
             {active === "facilities" && <MgrFacilities api={api} data={data} reload={loadAll} show={show} />}
             {active === "packages" && <MgrPackages api={api} data={data} reload={loadAll} show={show} />}
             {active === "service-requests" && <MgrServiceRequests api={api} data={data} reload={loadAll} show={show} />}
-            {active === "access-log" && <MgrAccessLog data={data} />}
+            {active === "access-log" && <MgrAccessLog api={api} show={show} />}
             {active === "messages" && (
               <MgrMessagesErrorBoundary key="messages-boundary" onRetry={loadAll}>
                 <MgrMessages api={api} data={data} reload={loadAll} />
@@ -2203,8 +2214,33 @@ function MgrRooms({ api, data, reload, show }) {
   );
 }
 
+// Source badge colors
+const SOURCE_COLORS = {
+  manual:      { bg: "#e5e7eb", color: "#6b7280" },
+  csv:         { bg: "#dbeafe", color: "#1d4ed8" },
+  airbnb:      { bg: "#fee2e2", color: "#dc2626" },
+  booking_com: { bg: "#1e3a5f", color: "#fff"    },
+  expedia:     { bg: "#fef3c7", color: "#92400e" },
+  website:     { bg: "#d1fae5", color: "#065f46" },
+  gmail:       { bg: "#fce7f3", color: "#9d174d" },
+  api:         { bg: "#ede9fe", color: "#5b21b6" },
+};
+function SourceBadge({ source }) {
+  if (!source || source === "manual") return null;
+  const s = SOURCE_COLORS[source] || { bg: "#e5e7eb", color: "#374151" };
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
+                   background: s.bg, color: s.color, marginLeft: 4, textTransform: "uppercase" }}>
+      {source.replace("_", ".")}
+    </span>
+  );
+}
+
 function MgrBookings({ api, data, reload, show }) {
-  const [form, setForm] = useState({ guestName: "", guestEmail: "", guestPhone: "", roomId: "", packageId: "", checkIn: "", checkOut: "", specialNotes: "" });
+  const [form, setForm] = useState({
+    guestName: "", guestEmail: "", guestPhone: "", roomId: "", packageId: "",
+    checkIn: "", checkOut: "", specialNotes: "", bookingSource: "manual"
+  });
   const [created, setCreated] = useState(null);
   const [resending, setResending] = useState(null);
   const [scanning, setScanning] = useState(false);
@@ -2212,6 +2248,14 @@ function MgrBookings({ api, data, reload, show }) {
   const [confirming, setConfirming] = useState(false);
   const [search, setSearch] = useState("");
   const [revoking, setRevoking] = useState(null);
+
+  // CSV Import state
+  const [importOpen,    setImportOpen]    = useState(false);
+  const [importStep,    setImportStep]    = useState(1); // 1=upload 2=preview 3=success
+  const [importPreview, setImportPreview] = useState(null);
+  const [importing,     setImporting]     = useState(false);
+  const [importResult,  setImportResult]  = useState(null);
+  const fileInputRef = useRef(null);
 
   async function create(e) {
     e.preventDefault();
@@ -2221,6 +2265,41 @@ function MgrBookings({ api, data, reload, show }) {
       reload();
       show("Booking created — email sent to guest", "success");
     } catch (err) { show(err.message, "error"); }
+  }
+
+  async function handleFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const preview = await api.requestRaw("/api/import/bookings/preview", { method: "POST", body: fd });
+      setImportPreview(preview);
+      setImportStep(2);
+    } catch (err) { show(err.message, "error"); }
+    e.target.value = "";
+  }
+
+  async function confirmImport() {
+    if (!importPreview) return;
+    setImporting(true);
+    try {
+      const result = await api.request("/api/import/bookings/confirm", {
+        method: "POST",
+        body: JSON.stringify({ preview: importPreview.preview }),
+      });
+      setImportResult(result);
+      setImportStep(3);
+      reload();
+    } catch (err) { show(err.message, "error"); }
+    finally { setImporting(false); }
+  }
+
+  function closeImport() {
+    setImportOpen(false);
+    setImportStep(1);
+    setImportPreview(null);
+    setImportResult(null);
   }
 
   async function resend(id) {
@@ -2281,7 +2360,12 @@ function MgrBookings({ api, data, reload, show }) {
   return (
     <section className="split">
       <form className="panel stack" onSubmit={create}>
-        <h2>New booking</h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ margin: 0 }}>New booking</h2>
+          <button type="button" className="ghost sm" onClick={() => setImportOpen(true)}>
+            <Upload size={14} />Import CSV
+          </button>
+        </div>
         <input required placeholder="Guest name" value={form.guestName} onChange={e => setForm({ ...form, guestName: e.target.value })} />
         <input required type="email" placeholder="Guest email" value={form.guestEmail} onChange={e => setForm({ ...form, guestEmail: e.target.value })} />
         <input placeholder="Guest phone" value={form.guestPhone} onChange={e => setForm({ ...form, guestPhone: e.target.value })} />
@@ -2298,6 +2382,17 @@ function MgrBookings({ api, data, reload, show }) {
         <label className="input-label">Check-out</label>
         <input required type="datetime-local" value={form.checkOut} onChange={e => setForm({ ...form, checkOut: e.target.value })} />
         <textarea placeholder="Special notes" value={form.specialNotes} onChange={e => setForm({ ...form, specialNotes: e.target.value })} rows={2} />
+        <label className="input-label">Source</label>
+        <select value={form.bookingSource} onChange={e => setForm({ ...form, bookingSource: e.target.value })}>
+          <option value="manual">Manual</option>
+          <option value="csv">CSV Import</option>
+          <option value="gmail" disabled>Gmail (coming soon)</option>
+          <option value="booking_com">Booking.com</option>
+          <option value="airbnb">Airbnb</option>
+          <option value="expedia">Expedia</option>
+          <option value="website">Website</option>
+          <option value="api">Other</option>
+        </select>
         <button className="primary" type="submit"><QrCode size={18} />Create booking &amp; send email</button>
         {created && (
           <div className="booking-created">
@@ -2349,7 +2444,11 @@ function MgrBookings({ api, data, reload, show }) {
                   : <span>{b.guest_name?.[0] || "?"}</span>
                 }
               </div>
-              <div><strong>{b.guest_name}</strong><small>{b.guest_email}</small></div>
+              <div>
+                <strong>{b.guest_name}</strong>
+                <SourceBadge source={b.booking_source} />
+                <small>{b.guest_email}</small>
+              </div>
               <span>Room {b.room_number}</span>
               <span className={`pill ${b.revoked ? "revoked" : b.status}`}>{b.revoked ? "revoked" : b.status}</span>
               <span>{fmtDate(b.check_in)}</span>
@@ -2375,6 +2474,95 @@ function MgrBookings({ api, data, reload, show }) {
       </div>
 
       {scanning && <QrScanner onScan={handleCheckinScan} onClose={() => setScanning(false)} bookings={data.bookings} />}
+
+      {/* ── CSV Import Modal ─────────────────────────────────────────────── */}
+      <input type="file" accept=".csv" ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
+      {importOpen && (
+        <div className="modal-overlay" onClick={closeImport}>
+          <div className="modal-box" style={{ maxWidth: 680, width: "95vw" }} onClick={e => e.stopPropagation()}>
+            <button className="modal-close" onClick={closeImport}><X size={18} /></button>
+
+            {importStep === 1 && (
+              <div className="stack">
+                <h3>Import Bookings from CSV</h3>
+                <p className="muted">Upload a CSV file exported from Airbnb, Booking.com, Expedia, or any booking platform.</p>
+                <div className="import-dropzone" onClick={() => fileInputRef.current?.click()}
+                  style={{ border: "2px dashed var(--border)", borderRadius: 10, padding: "32px 24px",
+                           textAlign: "center", cursor: "pointer", color: "var(--muted)" }}>
+                  <Upload size={32} style={{ marginBottom: 10, opacity: 0.5 }} />
+                  <p style={{ margin: 0, fontWeight: 600 }}>Drop CSV file here or click to browse</p>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", background: "var(--surface)", padding: "10px 14px", borderRadius: 8 }}>
+                  <strong>Required columns:</strong> Guest Name, Email, Room, Check In, Check Out
+                  <br /><strong>Optional:</strong> Phone, Package, Source
+                  <br /><strong>Accepted date formats:</strong> 2026-06-15 · 15/06/2026 · June 15 2026
+                </div>
+              </div>
+            )}
+
+            {importStep === 2 && importPreview && (
+              <div className="stack">
+                <h3>Preview Import</h3>
+                <div style={{ display: "flex", gap: 16, fontSize: 13 }}>
+                  <span style={{ color: "var(--green)", fontWeight: 700 }}>✓ {importPreview.valid_rows} valid</span>
+                  {importPreview.error_rows > 0 && <span style={{ color: "var(--red)", fontWeight: 700 }}>✗ {importPreview.error_rows} errors</span>}
+                  <span className="muted">{importPreview.total_rows} total rows</span>
+                </div>
+                <div style={{ overflowX: "auto", maxHeight: 340, overflowY: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--muted)" }}>
+                        {["#","Guest","Email","Room","Check In","Check Out","Package","Status"].map(h => (
+                          <th key={h} style={{ padding: "6px 8px", textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.preview.map(row => (
+                        <tr key={row.row}
+                          style={{ background: row.status === "error" ? "rgba(220,38,38,0.06)" : "transparent",
+                                   borderBottom: "1px solid var(--border)" }}>
+                          <td style={{ padding: "6px 8px", color: "var(--muted)" }}>{row.row}</td>
+                          <td style={{ padding: "6px 8px", fontWeight: 600 }}>{row.guest_name}</td>
+                          <td style={{ padding: "6px 8px", color: "var(--muted)" }}>{row.guest_email}</td>
+                          <td style={{ padding: "6px 8px" }}>{row.room_name}</td>
+                          <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{row.check_in}</td>
+                          <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{row.check_out}</td>
+                          <td style={{ padding: "6px 8px" }}>{row.package_name || "—"}</td>
+                          <td style={{ padding: "6px 8px" }}>
+                            {row.status === "valid"
+                              ? <span style={{ color: "var(--green)", fontWeight: 700 }}>✓</span>
+                              : <span style={{ color: "var(--red)", fontSize: 11 }} title={row.errors.join("; ")}>✗ {row.errors[0]}</span>
+                            }
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button className="ghost" onClick={closeImport}>Cancel</button>
+                  <button className="primary" onClick={confirmImport} disabled={importing || importPreview.valid_rows === 0}>
+                    {importing ? "Importing…" : `Confirm Import (${importPreview.valid_rows} bookings)`}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {importStep === 3 && importResult && (
+              <div className="stack" style={{ textAlign: "center", padding: "24px 0" }}>
+                <CheckCircle size={48} style={{ color: "var(--green)", margin: "0 auto" }} />
+                <h3>{importResult.created} booking{importResult.created !== 1 ? "s" : ""} created successfully</h3>
+                {importResult.failed > 0 && (
+                  <p style={{ color: "var(--red)" }}>{importResult.failed} row{importResult.failed !== 1 ? "s" : ""} failed to import.</p>
+                )}
+                <p className="muted">Confirmation emails have been sent to all guests.</p>
+                <button className="primary" onClick={closeImport}>Done</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -2678,62 +2866,186 @@ function MgrServiceRequests({ api, data, reload, show }) {
   );
 }
 
-function MgrAccessLog({ data }) {
-  const log = data.accessLog || [];
+function MgrAccessLog({ api, show }) {
+  const [rows,         setRows]         = useState([]);
+  const [total,        setTotal]        = useState(0);
+  const [page,         setPage]         = useState(1);
+  const [loading,      setLoading]      = useState(true);
+  const [search,       setSearch]       = useState("");
+  const [filterType,   setFilterType]   = useState("all");
+  const [filterResult, setFilterResult] = useState("all");
+  const [filterDate,   setFilterDate]   = useState("all");
+  const [exporting,    setExporting]    = useState(false);
+  const limit = 50;
+
+  function buildParams(pg = page) {
+    const p = new URLSearchParams();
+    p.set("page",  pg);
+    p.set("limit", limit);
+    if (search)                         p.set("search",        search);
+    if (filterType   !== "all")         p.set("resource_type", filterType);
+    if (filterResult !== "all")         p.set("result",        filterResult);
+    const now = new Date();
+    if (filterDate === "today") {
+      p.set("from", now.toISOString().slice(0, 10));
+    } else if (filterDate === "week") {
+      const d = new Date(now); d.setDate(d.getDate() - 7);
+      p.set("from", d.toISOString().slice(0, 10));
+    } else if (filterDate === "month") {
+      const d = new Date(now); d.setDate(d.getDate() - 30);
+      p.set("from", d.toISOString().slice(0, 10));
+    }
+    return p.toString();
+  }
+
+  async function load(pg = page) {
+    setLoading(true);
+    try {
+      const data = await api.request(`/api/activity-log?${buildParams(pg)}`);
+      setRows(data.rows || []);
+      setTotal(data.total || 0);
+      setPage(pg);
+    } catch (err) { show?.(err.message, "error"); }
+    finally { setLoading(false); }
+  }
+
+  useEffect(() => { load(1); }, [search, filterType, filterResult, filterDate]);
+
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const token = localStorage.getItem("zynloc_token");
+      const params = buildParams(1).replace(/&?page=\d+/, "").replace(/&?limit=\d+/, "");
+      const res = await fetch(`${API}/api/activity-log/export?${params}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url; a.download = `activity-log-${Date.now()}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { show?.(err.message, "error"); }
+    finally { setExporting(false); }
+  }
+
+  function resultBadge(result) {
+    if (result === "granted" || result === "confirmed") {
+      return (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4,
+                       color: "var(--green)", fontWeight: 600, fontSize: 12 }}>
+          <CheckCircle size={12} /> {cap(result)}
+        </span>
+      );
+    }
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4,
+                     color: "var(--red)", fontWeight: 600, fontSize: 12 }}>
+        <XCircle size={12} /> {cap(result)}
+      </span>
+    );
+  }
+
+  const totalPages = Math.ceil(total / limit);
+
   return (
     <section className="panel stack">
-      <h2 style={{ margin: 0 }}>Access Log</h2>
-      <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-        Facility scan history — most recent first
-      </p>
-      {log.length === 0 ? (
-        <p className="muted" style={{ padding: "24px 0", textAlign: "center" }}>
-          No access events yet. Guests will appear here after scanning a facility QR.
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Activity Log</h2>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>All guest access events — check-ins, check-outs, facility scans</p>
+        </div>
+        <button className="ghost sm" onClick={exportCsv} disabled={exporting}>
+          <Download size={14} />{exporting ? "Exporting…" : "Export CSV"}
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 180px" }}>
+          <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", pointerEvents: "none" }} />
+          <input placeholder="Search guest or resource…" value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ paddingLeft: 32, width: "100%", boxSizing: "border-box" }} />
+        </div>
+        <select value={filterType} onChange={e => setFilterType(e.target.value)} style={{ flex: "0 0 auto" }}>
+          <option value="all">All types</option>
+          <option value="facility">Facility</option>
+          <option value="room">Room</option>
+          <option value="reception">Reception</option>
+        </select>
+        <select value={filterResult} onChange={e => setFilterResult(e.target.value)} style={{ flex: "0 0 auto" }}>
+          <option value="all">All results</option>
+          <option value="granted">Granted</option>
+          <option value="denied">Denied</option>
+          <option value="confirmed">Confirmed</option>
+        </select>
+        <select value={filterDate} onChange={e => setFilterDate(e.target.value)} style={{ flex: "0 0 auto" }}>
+          <option value="all">All time</option>
+          <option value="today">Today</option>
+          <option value="week">This week</option>
+          <option value="month">This month</option>
+        </select>
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <p className="muted" style={{ textAlign: "center", padding: "24px 0" }}>Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="muted" style={{ textAlign: "center", padding: "24px 0" }}>
+          No activity events found. Events appear here after guests check in, scan facilities, or check out.
         </p>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--muted)" }}>
-                {["Time", "Guest", "Facility", "Result"].map(h => (
+                {["Time", "Actor", "Type", "Resource", "Action", "Result"].map(h => (
                   <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {log.map(entry => (
+              {rows.map(entry => (
                 <tr key={entry.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "10px 12px", color: "var(--muted)", whiteSpace: "nowrap" }}>
-                    {formatMessageTime(entry.created_at)}
+                  <td style={{ padding: "10px 12px", color: "var(--muted)", whiteSpace: "nowrap", fontSize: 12 }}>
+                    {formatMessageTime(entry.accessed_at)}
                   </td>
                   <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                    {entry.guest_name || <span style={{ color: "var(--muted)" }}>Unknown</span>}
-                    {entry.room_number && (
-                      <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12, marginLeft: 6 }}>
-                        Rm {entry.room_number}
-                      </span>
-                    )}
+                    {entry.actor_name || <span style={{ color: "var(--muted)" }}>—</span>}
                   </td>
                   <td style={{ padding: "10px 12px" }}>
-                    {entry.facility_name || <span style={{ color: "var(--muted)" }}>—</span>}
+                    <span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase",
+                                   color: "var(--muted)", letterSpacing: "0.04em" }}>
+                      {entry.actor_type || "guest"}
+                    </span>
                   </td>
                   <td style={{ padding: "10px 12px" }}>
-                    {entry.result === "access_granted" ? (
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                                     color: "var(--green)", fontWeight: 600, fontSize: 12 }}>
-                        <CheckCircle size={13} /> Granted
-                      </span>
-                    ) : (
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                                     color: "var(--red)", fontWeight: 600, fontSize: 12 }}>
-                        <XCircle size={13} /> Denied
-                      </span>
-                    )}
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                      <span>{entry.resource_name || "—"}</span>
+                      <span style={{ fontSize: 11, color: "var(--muted)" }}>{cap(entry.resource_type)}</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: "10px 12px" }}>
+                    {cap(entry.action?.replace("_", " ") || "")}
+                  </td>
+                  <td style={{ padding: "10px 12px" }}>
+                    {resultBadge(entry.result)}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", paddingTop: 8 }}>
+          <button className="ghost sm" disabled={page <= 1} onClick={() => load(page - 1)}>← Prev</button>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>Page {page} of {totalPages} · {total} events</span>
+          <button className="ghost sm" disabled={page >= totalPages} onClick={() => load(page + 1)}>Next →</button>
         </div>
       )}
     </section>
@@ -3890,7 +4202,7 @@ function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
   return (
     <div className="settings-shell">
       <div className="settings-tabs">
-        {["brand","email","navigation","qr"].map(t => (
+        {["brand","email","navigation","qr","integrations"].map(t => (
           <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{cap(t)}</button>
         ))}
       </div>
@@ -4135,6 +4447,58 @@ function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
           <p className="muted">Place this at the exit. Guests scan it to complete checkout.</p>
           <QrBlock dataUrl={checkoutQr} label="Checkout QR" />
           <button className="ghost" onClick={regenQr}><QrCode size={15} />Regenerate</button>
+        </div>
+      )}
+
+      {tab === "integrations" && (
+        <div className="stack">
+          <h2>Integrations</h2>
+          <p className="muted">Connect external services to automate booking imports and enhance your workflow.</p>
+
+          {/* Gmail Integration Card */}
+          <div style={{
+            border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px",
+            display: "flex", flexDirection: "column", gap: 12,
+            background: "var(--surface)",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 8, background: "#fff",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            border: "1px solid var(--border)", fontSize: 22 }}>
+                ✉️
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <strong style={{ fontSize: 15 }}>Gmail Integration</strong>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
+                                 background: "#fef3c7", color: "#92400e", textTransform: "uppercase",
+                                 letterSpacing: "0.05em" }}>
+                    Coming Soon
+                  </span>
+                </div>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+                  Connect your Gmail inbox to automatically import booking confirmations from Airbnb, Booking.com, and other platforms.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12, color: "var(--muted)" }}>
+              <span style={{ background: "var(--bg)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>📧 Auto-import from Airbnb</span>
+              <span style={{ background: "var(--bg)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>📧 Auto-import from Booking.com</span>
+              <span style={{ background: "var(--bg)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>📧 Auto-import from Expedia</span>
+            </div>
+            <button className="primary" disabled style={{ opacity: 0.5, cursor: "not-allowed", alignSelf: "flex-start" }}>
+              Connect Gmail
+            </button>
+          </div>
+
+          {/* Placeholder for future integrations */}
+          <div style={{
+            border: "1px dashed var(--border)", borderRadius: 12, padding: "20px 24px",
+            display: "flex", alignItems: "center", gap: 12, color: "var(--muted)", fontSize: 13,
+          }}>
+            <Plus size={20} style={{ opacity: 0.4 }} />
+            <span>More integrations coming soon — Booking.com direct API, Expedia Partner Connect, and more.</span>
+          </div>
         </div>
       )}
     </div>

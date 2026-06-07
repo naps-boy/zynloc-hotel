@@ -27,6 +27,8 @@ import { accessLogRouter }       from "./routes/access-log.js";
 import { smtpRouter }            from "./routes/smtp.js";
 import { alertsRouter }          from "./routes/alerts.js";
 import { adminRouter }           from "./routes/admin.js";
+import { importRouter }         from "./routes/import.js";
+import { activityLogRouter }    from "./routes/activity-log.js";
 import { attachRealtime }        from "./services/realtime.js";
 import { startLateCheckoutMonitor } from "./jobs/lateCheckout.js";
 import { runMigrations }         from "./db/runMigrations.js";
@@ -93,6 +95,8 @@ app.use("/api/access-log",       accessLogRouter);
 app.use("/api/smtp",             smtpRouter);
 app.use("/api/alerts",           alertsRouter);
 app.use("/api/admin",            adminRouter);
+app.use("/api/import",          importRouter);
+app.use("/api/activity-log",    activityLogRouter);
 
 // ── Global error handler ──────────────────────────────────────────────────────
 app.use((err, _req, res, _next) => {

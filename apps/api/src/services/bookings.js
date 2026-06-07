@@ -34,8 +34,9 @@ export async function createBookingFromDraft({ hotelId, draft }) {
     const created = (await client.query(
       `INSERT INTO bookings
          (hotel_id, guest_id, room_id, package_type, check_in, check_out,
-          amount, special_notes, package_id, profile_status, guest_phone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10)
+          amount, special_notes, package_id, profile_status, guest_phone,
+          booking_source, imported_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12)
        RETURNING *`,
       [
         hotelId, guest.id, draft.roomId,
@@ -43,7 +44,9 @@ export async function createBookingFromDraft({ hotelId, draft }) {
         checkIn, checkOut, amount,
         draft.specialNotes || "",
         draft.packageId || null,
-        draft.guestPhone || ""
+        draft.guestPhone || "",
+        draft.bookingSource || "manual",
+        draft.importedAt   || null,
       ]
     )).rows[0];
 

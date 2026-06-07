@@ -179,6 +179,16 @@ guestRouter.get("/:token/checkin-qr", requireValidQr, asyncHandler(async (req, r
 // ─── POST /:token/checkin — receptionist confirms check-in after visual ID ────
 guestRouter.post("/:token/checkin", requireValidQr, asyncHandler(async (req, res) => {
   await query("UPDATE bookings SET status = 'current' WHERE id = $1", [req.qr.booking_id]);
+
+  // Write check-in to access_activity_log (non-fatal)
+  query(
+    `INSERT INTO access_activity_log
+       (hotel_id, booking_id, guest_id, actor_name, actor_type,
+        resource_type, resource_id, resource_name, action, result)
+     VALUES ($1,$2,$3,$4,'guest','reception',$5,'Reception','check_in','confirmed')`,
+    [req.qr.hotel_id, req.qr.booking_id, req.qr.guest_id, req.qr.guest_name, req.qr.hotel_id]
+  ).catch(err => console.warn("[activity-log checkin]", err.message));
+
   const notif = (await query(
     `INSERT INTO notifications (hotel_id, guest_id, type, title, body, event_type, guest_photo)
      VALUES ($1,$2,'checkin','Guest checked in',$3,'checkin',$4) RETURNING *`,
@@ -247,6 +257,16 @@ guestRouter.post("/:token/checkout", requireValidQr, asyncHandler(async (req, re
   await query("UPDATE rooms SET status = 'cleaning' WHERE number = $1 AND hotel_id = $2",
     [req.qr.room_number, req.qr.hotel_id]);
 
+  // Write checkout to access_activity_log (non-fatal)
+  query(
+    `INSERT INTO access_activity_log
+       (hotel_id, booking_id, guest_id, actor_name, actor_type,
+        resource_type, resource_id, resource_name, action, result)
+     VALUES ($1,$2,$3,$4,'guest','room',$5,$6,'check_out','confirmed')`,
+    [req.qr.hotel_id, req.qr.booking_id, req.qr.guest_id, req.qr.guest_name,
+     req.qr.room_id || null, `Room ${req.qr.room_number}`]
+  ).catch(err => console.warn("[activity-log checkout]", err.message));
+
   const notif = (await query(
     `INSERT INTO notifications (hotel_id, guest_id, type, title, body, event_type)
      VALUES ($1,$2,'checkout','Guest checked out',$3,'checkout') RETURNING *`,
@@ -285,6 +305,17 @@ guestRouter.post("/:token/checkout-scan", requireValidQr, asyncHandler(async (re
   await query("UPDATE qr_codes SET expires_at = NOW() WHERE id = $1", [req.qr.qr_id]);
   await query("UPDATE rooms SET status = 'cleaning' WHERE number = $1 AND hotel_id = $2",
     [req.qr.room_number, req.qr.hotel_id]);
+
+  // Write checkout to access_activity_log (non-fatal)
+  query(
+    `INSERT INTO access_activity_log
+       (hotel_id, booking_id, guest_id, actor_name, actor_type,
+        resource_type, resource_id, resource_name, action, result)
+     VALUES ($1,$2,$3,$4,'guest','room',$5,$6,'check_out','confirmed')`,
+    [req.qr.hotel_id, req.qr.booking_id, req.qr.guest_id, req.qr.guest_name,
+     req.qr.room_id || null, `Room ${req.qr.room_number}`]
+  ).catch(err => console.warn("[activity-log checkout-scan]", err.message));
+
   emitHotel(req.qr.hotel_id, "bookings:changed", {});
   emitHotel(req.qr.hotel_id, "rooms:changed", {});
   const hotel = (await query("SELECT * FROM hotels WHERE id = $1", [req.qr.hotel_id])).rows[0];
@@ -349,6 +380,20 @@ guestRouter.post("/:token/facility-scan", requireValidQr, asyncHandler(async (re
      VALUES ($1,$2,$3,$4)`,
     [req.qr.hotel_id, req.qr.qr_id, fqr.facility_id, result]
   );
+
+  // Write to access_activity_log (non-fatal)
+  query(
+    `INSERT INTO access_activity_log
+       (hotel_id, booking_id, guest_id, actor_name, actor_type,
+        resource_type, resource_id, resource_name, action, result, metadata)
+     VALUES ($1,$2,$3,$4,'guest','facility',$5,$6,'access',$7,$8)`,
+    [
+      req.qr.hotel_id, req.qr.booking_id, req.qr.guest_id, req.qr.guest_name,
+      fqr.facility_id, facility?.name || null,
+      result === "access_granted" ? "granted" : "denied",
+      JSON.stringify({ package_type: req.qr.package_type }),
+    ]
+  ).catch(err => console.warn("[activity-log facility]", err.message));
 
   if (result === "access_denied") {
     const notif = (await query(
