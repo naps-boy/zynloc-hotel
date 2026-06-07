@@ -1,5 +1,4 @@
 import { Router }     from "express";
-import { google }     from "googleapis";
 import { query }      from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
@@ -8,33 +7,107 @@ import { config }     from "../config.js";
 
 export const gmailRouter = Router();
 
-function getOAuthClient() {
-  return new google.auth.OAuth2(
-    config.googleClientId,
-    config.googleClientSecret,
-    config.googleRedirectUri
+// ── OAuth helpers (direct fetch — no googleapis library) ──────────────────────
+
+function buildAuthUrl(hotelId) {
+  return "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
+    client_id:     config.googleClientId,
+    redirect_uri:  config.googleRedirectUri,
+    response_type: "code",
+    scope:         "https://www.googleapis.com/auth/gmail.readonly",
+    access_type:   "offline",
+    prompt:        "consent",
+    state:         hotelId,
+  }).toString();
+}
+
+async function exchangeCode(code) {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method:  "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:    new URLSearchParams({
+      code,
+      client_id:     config.googleClientId,
+      client_secret: config.googleClientSecret,
+      redirect_uri:  config.googleRedirectUri,
+      grant_type:    "authorization_code",
+    }),
+  });
+  return res.json();
+}
+
+async function refreshAccessToken(refreshToken) {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method:  "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:    new URLSearchParams({
+      refresh_token: refreshToken,
+      client_id:     config.googleClientId,
+      client_secret: config.googleClientSecret,
+      grant_type:    "refresh_token",
+    }),
+  });
+  return res.json();
+}
+
+async function getGmailProfile(accessToken) {
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  return res.json();
+}
+
+async function listMessages(accessToken, queryStr, maxResults = 20) {
+  const res = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages?" + new URLSearchParams({
+      q:          queryStr,
+      maxResults: String(maxResults),
+    }),
+    { headers: { Authorization: `Bearer ${accessToken}` } }
   );
+  return res.json();
+}
+
+async function getMessage(accessToken, messageId) {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  return res.json();
+}
+
+// Get a valid access token — refresh if expired or close to expiry
+async function getValidToken(int, hotelId) {
+  const expiresAt = int.token_expiry ? new Date(int.token_expiry).getTime() : 0;
+  const needsRefresh = !int.access_token || expiresAt < Date.now() + 60_000;
+
+  if (!needsRefresh) return int.access_token;
+
+  if (!int.refresh_token) throw new HttpError(400, "Gmail token expired and no refresh token stored — please reconnect Gmail.");
+
+  const tokens = await refreshAccessToken(int.refresh_token);
+  if (!tokens.access_token) throw new HttpError(400, "Failed to refresh Gmail access token — please reconnect Gmail.");
+
+  await query(
+    `UPDATE email_integrations
+        SET access_token = $1, token_expiry = $2, updated_at = now()
+      WHERE hotel_id = $3 AND provider = 'gmail'`,
+    [tokens.access_token, tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000) : null, hotelId]
+  ).catch(err => console.warn("[gmail token save]", err.message));
+
+  return tokens.access_token;
 }
 
 // ── GET /api/gmail/auth-url ───────────────────────────────────────────────────
-// Returns the Google OAuth URL the manager should be redirected to.
 gmailRouter.get("/auth-url", requireAuth, asyncHandler(async (req, res) => {
   if (!config.googleClientId || config.googleClientId === "PLACEHOLDER_REPLACE_WITH_REAL") {
     throw new HttpError(503, "Gmail integration not configured yet. Please add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your Render environment variables.");
   }
-  const oauth2Client = getOAuthClient();
-  const url = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope:       ["https://www.googleapis.com/auth/gmail.readonly"],
-    state:       req.user.hotelId,   // passed back in callback so we know which hotel
-    prompt:      "consent",          // force refresh_token every time
-  });
-  res.json({ url });
+  res.json({ url: buildAuthUrl(req.user.hotelId) });
 }));
 
 // ── GET /api/gmail/callback ───────────────────────────────────────────────────
-// Public endpoint — Google redirects here after user approves OAuth.
-// No requireAuth — the hotelId is carried in the `state` param.
+// Public — Google redirects here after user approves OAuth
 gmailRouter.get("/callback", asyncHandler(async (req, res) => {
   const { code, state: hotelId, error } = req.query;
 
@@ -44,16 +117,12 @@ gmailRouter.get("/callback", asyncHandler(async (req, res) => {
   }
 
   try {
-    const oauth2Client = getOAuthClient();
-    const { tokens } = await oauth2Client.getToken(code);
-    oauth2Client.setCredentials(tokens);
+    const tokens = await exchangeCode(code);
+    if (tokens.error) throw new Error(tokens.error_description || tokens.error);
 
-    // Fetch the Gmail address that just connected
-    const gmail   = google.gmail({ version: "v1", auth: oauth2Client });
-    const profile = await gmail.users.getProfile({ userId: "me" });
-    const emailAddress = profile.data.emailAddress;
+    const profile = await getGmailProfile(tokens.access_token);
+    const emailAddress = profile.emailAddress;
 
-    // Upsert — one Gmail row per hotel
     await query(
       `INSERT INTO email_integrations
          (hotel_id, provider, access_token, refresh_token, token_expiry, email_address, is_active)
@@ -69,7 +138,7 @@ gmailRouter.get("/callback", asyncHandler(async (req, res) => {
         hotelId,
         tokens.access_token,
         tokens.refresh_token || null,
-        tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+        tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000) : null,
         emailAddress,
       ]
     );
@@ -77,7 +146,7 @@ gmailRouter.get("/callback", asyncHandler(async (req, res) => {
     console.log(`[gmail] Hotel ${hotelId} connected ${emailAddress}`);
     res.redirect(`${config.clientUrl}?gmail_connected=true#settings`);
   } catch (err) {
-    console.error("[gmail callback] token exchange failed:", err.message);
+    console.error("[gmail callback] failed:", err.message);
     res.redirect(`${config.clientUrl}?gmail_error=true#settings`);
   }
 }));
@@ -85,9 +154,7 @@ gmailRouter.get("/callback", asyncHandler(async (req, res) => {
 // ── GET /api/gmail/status ─────────────────────────────────────────────────────
 gmailRouter.get("/status", requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `SELECT email_address, is_active, updated_at
-       FROM email_integrations
-      WHERE hotel_id = $1 AND provider = 'gmail'`,
+    "SELECT email_address, is_active, updated_at FROM email_integrations WHERE hotel_id = $1 AND provider = 'gmail'",
     [req.user.hotelId]
   );
   if (!rows.length || !rows[0].is_active) return res.json({ connected: false });
@@ -104,7 +171,6 @@ gmailRouter.delete("/disconnect", requireAuth, asyncHandler(async (req, res) => 
 }));
 
 // ── POST /api/gmail/scan ──────────────────────────────────────────────────────
-// Scan inbox for OTA booking confirmation emails. Returns parsed previews.
 gmailRouter.post("/scan", requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await query(
     "SELECT * FROM email_integrations WHERE hotel_id = $1 AND provider = 'gmail' AND is_active = true",
@@ -112,46 +178,20 @@ gmailRouter.post("/scan", requireAuth, asyncHandler(async (req, res) => {
   );
   if (!rows.length) throw new HttpError(400, "Gmail not connected");
 
-  const int = rows[0];
-  const oauth2Client = getOAuthClient();
-  oauth2Client.setCredentials({
-    access_token:  int.access_token,
-    refresh_token: int.refresh_token,
-    expiry_date:   int.token_expiry ? new Date(int.token_expiry).getTime() : null,
-  });
-
-  // Persist refreshed tokens automatically
-  oauth2Client.on("tokens", (tokens) => {
-    if (tokens.access_token) {
-      query(
-        `UPDATE email_integrations
-            SET access_token = $1, token_expiry = $2, updated_at = now()
-          WHERE hotel_id = $3 AND provider = 'gmail'`,
-        [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, req.user.hotelId]
-      ).catch(err => console.warn("[gmail token refresh]", err.message));
-    }
-  });
-
-  const gmail    = google.gmail({ version: "v1", auth: oauth2Client });
+  const accessToken = await getValidToken(rows[0], req.user.hotelId);
   const queryStr = "from:(airbnb.com OR booking.com OR expedia.com OR vrbo.com) subject:(reservation OR booking OR confirmation) newer_than:30d";
 
-  const listRes = await gmail.users.messages.list({
-    userId:     "me",
-    q:          queryStr,
-    maxResults: 20,
-  });
-
-  if (!listRes.data.messages?.length) return res.json({ found: 0, bookings: [] });
+  const list = await listMessages(accessToken, queryStr, 20);
+  if (!list.messages?.length) return res.json({ found: 0, bookings: [] });
 
   const parsedBookings = [];
 
-  for (const msg of listRes.data.messages.slice(0, 10)) {
+  for (const msg of list.messages.slice(0, 10)) {
     try {
-      const full = await gmail.users.messages.get({ userId: "me", id: msg.id, format: "full" });
-      const parsed = parseOTAEmail(full.data);
+      const full = await getMessage(accessToken, msg.id);
+      const parsed = parseOTAEmail(full);
       if (!parsed) continue;
 
-      // Skip emails already imported
       const { rows: existing } = await query(
         "SELECT id FROM bookings WHERE hotel_id = $1 AND source_reference = $2",
         [req.user.hotelId, msg.id]
@@ -168,15 +208,10 @@ gmailRouter.post("/scan", requireAuth, asyncHandler(async (req, res) => {
 }));
 
 // ── POST /api/gmail/confirm-import ────────────────────────────────────────────
-// Create real bookings from the parsed Gmail results.
-// Uses createBookingFromDraft so guests, QRs, emails all work correctly.
 gmailRouter.post("/confirm-import", requireAuth, asyncHandler(async (req, res) => {
   const { bookings } = req.body;
-  if (!Array.isArray(bookings) || !bookings.length) {
-    throw new HttpError(400, "bookings array required");
-  }
+  if (!Array.isArray(bookings) || !bookings.length) throw new HttpError(400, "bookings array required");
 
-  // Load rooms for best-effort matching
   const { rows: rooms } = await query(
     "SELECT id, number FROM rooms WHERE hotel_id = $1",
     [req.user.hotelId]
@@ -188,7 +223,6 @@ gmailRouter.post("/confirm-import", requireAuth, asyncHandler(async (req, res) =
 
   for (const b of bookings) {
     try {
-      // Match a room by number extracted from parsed room_name, else use first room
       let roomId = null;
       if (b.room_name) {
         const numMatch = String(b.room_name).match(/\d+/);
@@ -199,11 +233,10 @@ gmailRouter.post("/confirm-import", requireAuth, asyncHandler(async (req, res) =
       }
       if (!roomId) roomId = rooms[0].id;
 
-      // Validate we have usable dates — fall back to tomorrow/day-after if totally missing
       const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-      const dayAfter = new Date(); dayAfter.setDate(dayAfter.getDate() + 2);
-      const checkIn  = b.check_in  || tomorrow.toISOString().slice(0, 10);
-      const checkOut = b.check_out || dayAfter.toISOString().slice(0, 10);
+      const dayAfter  = new Date(); dayAfter.setDate(dayAfter.getDate() + 2);
+      const checkIn   = b.check_in  || tomorrow.toISOString().slice(0, 10);
+      const checkOut  = b.check_out || dayAfter.toISOString().slice(0, 10);
 
       const booking = await createBookingFromDraft({
         hotelId: req.user.hotelId,
@@ -223,7 +256,6 @@ gmailRouter.post("/confirm-import", requireAuth, asyncHandler(async (req, res) =
         },
       });
 
-      // Stamp the Gmail message ID so re-scans skip this email
       await query(
         "UPDATE bookings SET source_reference = $1 WHERE id = $2",
         [b.gmail_message_id, booking.id]
@@ -242,17 +274,15 @@ gmailRouter.post("/confirm-import", requireAuth, asyncHandler(async (req, res) =
 // ── Email body parser ─────────────────────────────────────────────────────────
 function parseOTAEmail(messageData) {
   try {
-    const headers   = messageData.payload.headers || [];
-    const from      = headers.find(h => h.name === "From")?.value    || "";
-    const subject   = headers.find(h => h.name === "Subject")?.value || "";
+    const headers = messageData.payload?.headers || [];
+    const from    = headers.find(h => h.name === "From")?.value    || "";
+    const subject = headers.find(h => h.name === "Subject")?.value || "";
 
-    // Decode body (plain text preferred; fall back to HTML stripped of tags)
     let body = "";
     function extractBody(part) {
       if (part.mimeType === "text/plain" && part.body?.data) {
         body += Buffer.from(part.body.data, "base64").toString("utf-8");
       } else if (part.mimeType === "text/html" && !body && part.body?.data) {
-        // Strip HTML tags as last resort
         body += Buffer.from(part.body.data, "base64").toString("utf-8")
           .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
       }
@@ -260,14 +290,12 @@ function parseOTAEmail(messageData) {
     }
     extractBody(messageData.payload);
 
-    // Determine OTA source
     let source = "gmail";
     if (from.includes("airbnb"))       source = "airbnb";
     else if (from.includes("booking")) source = "booking_com";
     else if (from.includes("expedia")) source = "expedia";
     else if (from.includes("vrbo"))    source = "vrbo";
 
-    // Guest name
     const namePatterns = [
       /Guest\s+name[:\s]+([A-Za-zÀ-ÿ\s\-'\.]{2,50})/i,
       /Reservation\s+for[:\s]+([A-Za-zÀ-ÿ\s\-'\.]{2,50})/i,
@@ -281,7 +309,6 @@ function parseOTAEmail(messageData) {
       if (m) { guestName = m[1].trim().replace(/\s+/g, " "); break; }
     }
 
-    // Check-in date
     const checkInPatterns = [
       /Check[\s\-]in[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /Arrival[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
@@ -292,7 +319,6 @@ function parseOTAEmail(messageData) {
       if (m) { const d = new Date(m[1]); if (!isNaN(d)) { checkIn = d.toISOString().slice(0, 10); break; } }
     }
 
-    // Check-out date
     const checkOutPatterns = [
       /Check[\s\-]out[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /Departure[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
@@ -303,13 +329,11 @@ function parseOTAEmail(messageData) {
       if (m) { const d = new Date(m[1]); if (!isNaN(d)) { checkOut = d.toISOString().slice(0, 10); break; } }
     }
 
-    // Guest email (skip the hotel's own email)
     const emailMatches = [...body.matchAll(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g)]
       .map(m => m[1])
       .filter(e => !e.includes("airbnb") && !e.includes("booking") && !e.includes("expedia") && !e.includes("noreply"));
     const guestEmail = emailMatches[0] || null;
 
-    // Need at least a name or a check-in date to be useful
     if (!guestName && !checkIn) return null;
 
     return {
