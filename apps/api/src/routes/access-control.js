@@ -77,10 +77,11 @@ accessControlRouter.post("/create-webview", asyncHandler(async (req, res) => {
     method: "POST",
     headers: { "Authorization": "Bearer " + seamKey, "Content-Type": "application/json" },
     body: JSON.stringify({
+      // Only include provider slugs confirmed valid in Seam API v2.
+      // Invalid slugs cause the entire request to fail with a 422.
       accepted_providers: [
         "august", "schlage", "yale", "salto", "igloohome",
-        "dormakaba", "kwikset", "lockly", "nuki", "ttlock",
-        "assa_abloy", "brivo", "latch",
+        "kwikset", "nuki", "ttlock",
       ],
       custom_metadata: { hotel_id: req.user.hotelId, hotel_name: hotelName },
     }),
@@ -88,8 +89,10 @@ accessControlRouter.post("/create-webview", asyncHandler(async (req, res) => {
 
   const data = await result.json();
   if (!result.ok || !data.connect_webview) {
-    console.error("[access-control] create-webview failed:", data);
-    throw new HttpError(500, "Failed to create lock connection flow. Please try again.");
+    const seamErr = data?.error?.message || data?.message || JSON.stringify(data);
+    console.error("[access-control] create-webview Seam error:", result.status, seamErr);
+    // Use 422 (not 500) so the production error handler surfaces the real message
+    throw new HttpError(422, `Seam error: ${seamErr}`);
   }
 
   const webview = data.connect_webview;
