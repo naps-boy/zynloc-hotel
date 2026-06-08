@@ -102,6 +102,29 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
 }));
 
 
+// ─── GET /api/admin/test-seam — temporary diagnostic ─────────────────────────
+adminRouter.get("/test-seam", asyncHandler(async (_req, res) => {
+  const key = process.env.SEAM_API_KEY;
+  if (!key || key === "PLACEHOLDER_ADD_YOUR_SEAM_KEY_HERE") {
+    return res.json({ seam_key: false, message: "No Seam API key configured" });
+  }
+  try {
+    const result = await fetch("https://connect.getseam.com/devices/list", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await result.json().catch(() => ({}));
+    if (result.ok) {
+      res.json({ seam_key: true, key_valid: true, device_count: data.devices?.length || 0, message: "Seam API key is valid and working" });
+    } else {
+      res.json({ seam_key: true, key_valid: false, error: data.error?.message || data.message || "Invalid key", message: "Seam API key exists but is not valid" });
+    }
+  } catch (err) {
+    res.json({ seam_key: false, error: err.message });
+  }
+}));
+
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
 adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   const { rows } = await query(`
