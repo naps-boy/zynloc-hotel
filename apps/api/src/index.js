@@ -57,7 +57,7 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", "Authorization", "X-Admin-Key"],
 };
 
-const io = new Server(server, { cors: corsOptions });
+const io = new Server(server, { cors: corsOptions, maxHttpBufferSize: 1e6 });
 attachRealtime(io);
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));

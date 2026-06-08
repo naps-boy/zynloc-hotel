@@ -25,3 +25,5 @@ services:
         value: PLACEHOLDER_REPLACE_WITH_REAL
       - key: GOOGLE_REDIRECT_URI
         value: https://zynloc-hotel-api.onrender.com/api/gmail/callback
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=400
