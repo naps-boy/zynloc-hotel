@@ -207,6 +207,27 @@ guestRouter.post("/:token/checkin", requireValidQr, asyncHandler(async (req, res
     bookingId: req.qr.booking_id,
     guestName: req.qr.guest_name,
   }).catch(() => {});
+
+  // Issue physical access credential if access control is connected — non-fatal
+  try {
+    const { AccessProvider } = await import("../services/access-provider.js");
+    const accessProvider = new AccessProvider(req.qr.hotel_id);
+    const hasProvider = await accessProvider.initialize();
+    if (hasProvider) {
+      const credential = await accessProvider.issueCredential({
+        bookingId:      req.qr.booking_id,
+        guestId:        req.qr.guest_id,
+        roomId:         req.qr.room_id,
+        validFrom:      new Date(),
+        validUntil:     new Date(req.qr.check_out),
+        credentialType: "guest",
+      });
+      console.log("[CheckIn] Credential issued:", credential.credentialId, credential.type);
+    }
+  } catch (err) {
+    console.error("[CheckIn] Credential issue error:", err.message);
+  }
+
   res.json({ ok: true });
 }));
 
@@ -296,6 +317,24 @@ guestRouter.post("/:token/checkout", requireValidQr, asyncHandler(async (req, re
     bookingId: req.qr.booking_id,
     guestName: req.qr.guest_name,
   }).catch(() => {});
+
+  // Revoke physical access credentials — non-fatal
+  try {
+    const { AccessProvider } = await import("../services/access-provider.js");
+    const activeCreds = await query(
+      "SELECT id FROM access_credentials WHERE booking_id = $1 AND status = 'active'",
+      [req.qr.booking_id]
+    );
+    if (activeCreds.rows.length > 0) {
+      const accessProvider = new AccessProvider(req.qr.hotel_id);
+      await accessProvider.initialize();
+      for (const cred of activeCreds.rows) await accessProvider.revokeCredential(cred.id);
+      console.log("[Checkout] Revoked", activeCreds.rows.length, "credential(s)");
+    }
+  } catch (err) {
+    console.error("[Checkout] Credential revoke error:", err.message);
+  }
+
   res.json({ ok: true });
 }));
 
@@ -344,6 +383,24 @@ guestRouter.post("/:token/checkout-scan", requireValidQr, asyncHandler(async (re
     bookingId: req.qr.booking_id,
     guestName: req.qr.guest_name,
   }).catch(() => {});
+
+  // Revoke physical access credentials — non-fatal
+  try {
+    const { AccessProvider } = await import("../services/access-provider.js");
+    const activeCreds2 = await query(
+      "SELECT id FROM access_credentials WHERE booking_id = $1 AND status = 'active'",
+      [req.qr.booking_id]
+    );
+    if (activeCreds2.rows.length > 0) {
+      const accessProvider2 = new AccessProvider(req.qr.hotel_id);
+      await accessProvider2.initialize();
+      for (const cred of activeCreds2.rows) await accessProvider2.revokeCredential(cred.id);
+      console.log("[CheckoutScan] Revoked", activeCreds2.rows.length, "credential(s)");
+    }
+  } catch (err) {
+    console.error("[CheckoutScan] Credential revoke error:", err.message);
+  }
+
   res.json({ ok: true });
 }));
 

@@ -4272,6 +4272,213 @@ function GmailIntegrationCard({ api, show }) {
   );
 }
 
+// ── AccessControlTab ──────────────────────────────────────────────────────────
+
+function AccessControlTab({ api, show }) {
+  const [status,      setStatus]      = useState(null);
+  const [devices,     setDevices]     = useState([]);
+  const [rooms,       setRooms]       = useState([]);
+  const [credentials, setCredentials] = useState([]);
+  const [apiKey,      setApiKey]      = useState("");
+  const [connecting,  setConnecting]  = useState(false);
+  const [loading,     setLoading]     = useState(true);
+
+  function loadDevicesAndCreds() {
+    api.request("/api/access-control/devices")
+      .then(d => setDevices(d.devices || []))
+      .catch(() => {});
+    api.request("/api/access-control/credentials")
+      .then(c => setCredentials(Array.isArray(c) ? c : []))
+      .catch(() => {});
+  }
+
+  useEffect(() => {
+    Promise.all([
+      api.request("/api/access-control/status"),
+      api.request("/api/rooms"),
+    ]).then(([s, r]) => {
+      setStatus(s);
+      setRooms(Array.isArray(r) ? r : []);
+      if (s.connected) loadDevicesAndCreds();
+    }).catch(err => show(err.message, "error"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleConnect() {
+    if (!apiKey.trim()) return;
+    setConnecting(true);
+    try {
+      const result = await api.request("/api/access-control/connect", {
+        method: "POST",
+        body: JSON.stringify({ apiKey: apiKey.trim() }),
+      });
+      setStatus({ connected: true, provider: "seam", name: "Seam" });
+      setApiKey("");
+      loadDevicesAndCreds();
+      show(`Connected — ${result.deviceCount} device(s) found`, "success");
+    } catch (err) {
+      show(err.message, "error");
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    if (!window.confirm("Disconnect access control? Existing credentials will remain active until they expire.")) return;
+    try {
+      await api.request("/api/access-control/disconnect", { method: "DELETE" });
+      setStatus({ connected: false });
+      setDevices([]);
+      show("Disconnected", "success");
+    } catch (err) {
+      show(err.message, "error");
+    }
+  }
+
+  async function handleMapDevice(roomId, deviceId, deviceName) {
+    try {
+      await api.request("/api/access-control/devices/map", {
+        method: "POST",
+        body: JSON.stringify({ roomId, deviceId, deviceName }),
+      });
+      loadDevicesAndCreds();
+      show("Room mapped", "success");
+    } catch (err) {
+      show(err.message, "error");
+    }
+  }
+
+  if (loading) return <div className="panel"><p className="muted">Loading…</p></div>;
+
+  return (
+    <div className="stack">
+      <h2>Access Control</h2>
+      <p className="muted">
+        Connect smart locks so guests receive a time-bound access code at check-in —
+        no physical key needed. Powered by Seam.
+      </p>
+
+      {!status?.connected ? (
+        <div className="panel stack">
+          <h3>Connect Seam</h3>
+          <p className="muted" style={{ fontSize: 13 }}>
+            Seam connects Zynloc to your existing smart locks — BLE, NFC, RFID, keypad, mobile key —
+            across all major brands including SALTO, Assa Abloy, Schlage, Yale, Igloohome, and more.
+          </p>
+          <p className="muted" style={{ fontSize: 12 }}>
+            Get your API key at <strong>seam.cool</strong> → Create account → API Keys
+          </p>
+          <input
+            type="password"
+            className="input"
+            placeholder="seam_sk_…"
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+          />
+          <button
+            className="primary"
+            onClick={handleConnect}
+            disabled={connecting || !apiKey.trim()}
+          >
+            <ShieldCheck size={16} />
+            {connecting ? "Connecting…" : "Connect Seam"}
+          </button>
+        </div>
+      ) : (
+        <div className="stack">
+          <div className="panel" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontWeight: 700 }}><CheckCircle size={14} style={{ marginRight: 6, color: "var(--green, #4caf50)" }} />Seam Connected</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {devices.length} device{devices.length !== 1 ? "s" : ""} available
+              </div>
+            </div>
+            <button className="ghost sm danger" onClick={handleDisconnect}>Disconnect</button>
+          </div>
+
+          <h3>Lock Devices</h3>
+          {devices.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>
+              No lock devices found. Make sure your locks are connected in your Seam dashboard at seam.cool
+            </p>
+          ) : (
+            <div className="cards">
+              {devices.map(device => (
+                <div key={device.deviceId} className="card" style={{ padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{device.name}</div>
+                      <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                        {device.type} · {device.isOnline ? "🟢 Online" : "🔴 Offline"}
+                        {device.batteryLevel != null && ` · Battery ${Math.round(device.batteryLevel * 100)}%`}
+                      </div>
+                      {device.mappedRoom && (
+                        <div style={{ fontSize: 12, color: "var(--gold)", marginTop: 4 }}>
+                          → Room {device.mappedRoom.roomNumber}
+                        </div>
+                      )}
+                    </div>
+                    <select
+                      style={{ fontSize: 12, padding: "4px 8px", minWidth: 120 }}
+                      value={device.mappedRoom?.roomId || ""}
+                      onChange={e => {
+                        if (e.target.value) handleMapDevice(e.target.value, device.deviceId, device.name);
+                      }}
+                    >
+                      <option value="">Map to room…</option>
+                      {rooms.map(r => (
+                        <option key={r.id} value={r.id}>Room {r.number} ({r.type})</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <h3>Recent Credentials</h3>
+          {credentials.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>
+              No credentials issued yet. Credentials are automatically issued when guests check in.
+            </p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                    {["Guest", "Room", "Type", "Valid Until", "Status"].map(h => (
+                      <th key={h} style={{ padding: "8px 10px", textAlign: "left", color: "var(--muted)", fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {credentials.slice(0, 20).map(c => (
+                    <tr key={c.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td style={{ padding: "8px 10px" }}>{c.guest_name || "—"}</td>
+                      <td style={{ padding: "8px 10px" }}>{c.room_number ? `Room ${c.room_number}` : "—"}</td>
+                      <td style={{ padding: "8px 10px" }}>{c.credential_type}</td>
+                      <td style={{ padding: "8px 10px" }}>{new Date(c.valid_until).toLocaleDateString()}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <span style={{
+                          padding: "2px 8px", borderRadius: 8, fontSize: 11, fontWeight: 600,
+                          background: c.status === "active" ? "#1a3d2a" : c.status === "revoked" ? "#3d1a1a" : "#2a2a2a",
+                          color: c.status === "active" ? "#4caf50" : c.status === "revoked" ? "#f44336" : "var(--muted)",
+                        }}>
+                          {c.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
   const s = data.settings || {};
   const [form, setForm] = useState({
@@ -4387,8 +4594,8 @@ function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
   return (
     <div className="settings-shell">
       <div className="settings-tabs">
-        {["brand","email","navigation","qr","integrations"].map(t => (
-          <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{cap(t)}</button>
+        {["brand","email","navigation","qr","integrations","access"].map(t => (
+          <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t === "access" ? "Access Control" : cap(t)}</button>
         ))}
       </div>
 
@@ -4648,6 +4855,10 @@ function MgrSettings({ api, data, reload, show, onEditStart, onEditEnd }) {
             <span>More integrations coming soon — Booking.com direct API, Expedia Partner Connect, and more.</span>
           </div>
         </div>
+      )}
+
+      {tab === "access" && (
+        <AccessControlTab api={api} show={show} />
       )}
     </div>
   );
