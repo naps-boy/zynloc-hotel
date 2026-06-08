@@ -447,25 +447,3 @@ export async function sendPasswordResetEmail({ staffEmail, staffName, hotelId, r
   console.error(`[PasswordReset] All ${allConfigs.length} SMTP config(s) exhausted. Email NOT sent to ${staffEmail}.`);
 }
 
-export async function sendVerificationRequest({ guest, hotel }) {
-  console.log(`[Email:sendVerificationRequest] ENTRY — guest=${guest?.email} hotel=${hotel?.name}`);
-  const link = `${config.clientUrl}/guest/${guest.access_token}`;
-  await send({
-    hotelId: hotel.id,
-    to: guest.email,
-    subject: `${hotel.name} — identity verification needed`,
-    html: `
-<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#0d1b2a;padding:32px">
-<div style="max-width:480px;margin:auto;background:#162235;border-radius:16px;padding:32px;text-align:center">
-  <h2 style="color:#d8a84f;margin:0 0 12px">Identity verification</h2>
-  <p style="color:#9aa6b2;margin:0 0 20px">
-    The reception team is ready to check you in.<br>
-    Please take a live selfie to verify your identity.
-  </p>
-  <a href="${link}"
-     style="display:inline-block;background:#d8a84f;color:#0d1b2a;padding:14px 28px;border-radius:8px;font-weight:700;text-decoration:none">
-    Verify Now →
-  </a>
-</div></body></html>`,
-  });
-}

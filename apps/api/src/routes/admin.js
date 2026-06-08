@@ -5,12 +5,17 @@ import { asyncHandler } from "../utils/http.js";
 export const adminRouter = Router();
 
 // ─── Admin key auth — NOT JWT, checked against ADMIN_SECRET env var ───────────
-// Falls back to the default key if ADMIN_SECRET env var is not set.
-const EFFECTIVE_ADMIN_SECRET = process.env.ADMIN_SECRET || "ZynlocAdmin2026!";
+// ADMIN_SECRET must be set via environment variable — no hardcoded fallback.
+// If it is missing the middleware rejects all requests rather than exposing
+// admin endpoints to anyone who reads the source code.
+const EFFECTIVE_ADMIN_SECRET = process.env.ADMIN_SECRET;
+if (!EFFECTIVE_ADMIN_SECRET) {
+  console.error("[admin] WARNING: ADMIN_SECRET env var is not set — all admin requests will be rejected");
+}
 
 function adminAuth(req, res, next) {
   const key = req.headers["x-admin-key"];
-  if (!key || key !== EFFECTIVE_ADMIN_SECRET) {
+  if (!EFFECTIVE_ADMIN_SECRET || !key || key !== EFFECTIVE_ADMIN_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();

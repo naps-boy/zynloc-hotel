@@ -165,8 +165,27 @@ navigationRouter.put("/paths/:id", asyncHandler(async (req, res) => {
 }));
 
 navigationRouter.delete("/paths/:id", asyncHandler(async (req, res) => {
-  await query("DELETE FROM nav_paths WHERE id = $1 AND hotel_id = $2",
-    [req.params.id, req.user.hotelId]);
+  // Look up the path first so we can delete both directions (A→B and B→A).
+  // Paths are always created as pairs in POST /paths — deleting only one ID
+  // would orphan the reverse direction and leave ghost edges in the nav graph.
+  const { rows: pathRows } = await query(
+    "SELECT from_waypoint_id, to_waypoint_id FROM nav_paths WHERE id = $1 AND hotel_id = $2",
+    [req.params.id, req.user.hotelId]
+  );
+  if (!pathRows[0]) return res.status(404).json({ error: "Path not found" });
+
+  const { from_waypoint_id, to_waypoint_id } = pathRows[0];
+
+  // Delete both directions in one statement
+  await query(
+    `DELETE FROM nav_paths
+      WHERE hotel_id = $1
+        AND (
+          (from_waypoint_id = $2 AND to_waypoint_id = $3) OR
+          (from_waypoint_id = $3 AND to_waypoint_id = $2)
+        )`,
+    [req.user.hotelId, from_waypoint_id, to_waypoint_id]
+  );
   res.status(204).end();
 }));
 

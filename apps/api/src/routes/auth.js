@@ -65,18 +65,25 @@ authRouter.post("/forgot-password", asyncHandler(async (req, res) => {
   const lookupEmail = email.toLowerCase();
   console.log(`[ForgotPw] Request received for: ${lookupEmail}`);
 
-  const { rows } = await query("SELECT id, hotel_id, name, email FROM staff WHERE email = $1", [lookupEmail]);
-  console.log(`[ForgotPw] Staff lookup — found: ${rows.length > 0}${rows.length ? ` (hotel_id=${rows[0].hotel_id})` : ""}`);
+  // ORDER BY created_at DESC — consistent with login: most-recently-created hotel wins.
+  // We generate a single reset token for rows[0] (the active hotel) and send the email,
+  // but we must reset the password on ALL staff records sharing this email so that
+  // whichever record login picks up, the new password works.
+  const { rows } = await query(
+    "SELECT id, hotel_id, name, email FROM staff WHERE email = $1 ORDER BY created_at DESC",
+    [lookupEmail]
+  );
+  console.log(`[ForgotPw] Staff lookup — found: ${rows.length}${rows.length ? ` (primary hotel_id=${rows[0].hotel_id})` : ""}`);
 
   if (rows.length) {
-    const staff = rows[0];
+    const staff = rows[0]; // most-recently-created hotel — same one login uses
     const token = crypto.randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     await query(
       "INSERT INTO password_reset_tokens (staff_id, token, expires_at) VALUES ($1, $2, $3)",
       [staff.id, token, expiresAt]
     );
-    console.log(`[ForgotPw] Token saved. Sending reset email to ${staff.email}`);
+    console.log(`[ForgotPw] Token saved for staff id=${staff.id}. Sending reset email to ${staff.email}`);
     const resetLink = `${config.clientUrl}/reset-password?token=${token}`;
     const messageId = await sendPasswordResetEmail({ staffEmail: staff.email, staffName: staff.name, hotelId: staff.hotel_id, resetLink });
     console.log(`[ForgotPw] sendPasswordResetEmail returned — messageId=${messageId} for ${staff.email}`);
@@ -96,7 +103,22 @@ authRouter.post("/reset-password", asyncHandler(async (req, res) => {
   );
   if (!rows.length) throw new HttpError(400, "Reset link is invalid or has expired");
   const { id: tokenId, staff_id } = rows[0];
-  await query("UPDATE staff SET password_hash = $1 WHERE id = $2", [await bcrypt.hash(password, 12), staff_id]);
+  const hash = await bcrypt.hash(password, 12);
+
+  // Update the staff record that owns the token
+  await query("UPDATE staff SET password_hash = $1 WHERE id = $2", [hash, staff_id]);
+
+  // Also update every other staff record sharing the same email so that
+  // multi-hotel users (same email, multiple hotels) can log in after a reset
+  // regardless of which hotel the login ORDER BY picks up.
+  const { rows: staffRows } = await query("SELECT email FROM staff WHERE id = $1", [staff_id]);
+  if (staffRows[0]) {
+    await query(
+      "UPDATE staff SET password_hash = $1 WHERE email = $2 AND id <> $3",
+      [hash, staffRows[0].email, staff_id]
+    );
+  }
+
   await query("UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1", [tokenId]);
   res.json({ ok: true });
 }));
@@ -109,5 +131,6 @@ authRouter.get("/me", requireAuth, asyncHandler(async (req, res) => {
       WHERE s.id = $1 AND s.hotel_id = $2`,
     [req.user.staffId, req.user.hotelId]
   );
+  if (!rows[0]) return res.status(401).json({ error: "Account not found" });
   res.json(rows[0]);
 }));
