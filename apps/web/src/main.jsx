@@ -4124,8 +4124,12 @@ function GmailIntegrationCard({ api, show }) {
 
   async function handleConnect() {
     try {
-      const { url } = await api.request("/api/gmail/auth-url");
-      window.location.href = url;
+      const result = await api.request("/api/gmail/auth-url");
+      if (result.configured === false) {
+        show("Gmail integration is coming soon. Contact Zynloc support to enable it.", "info");
+        return;
+      }
+      window.location.href = result.url;
     } catch (err) { show(err.message, "error"); }
   }
 
@@ -4279,8 +4283,9 @@ function AccessControlTab({ api, show }) {
   const [devices,     setDevices]     = useState([]);
   const [rooms,       setRooms]       = useState([]);
   const [credentials, setCredentials] = useState([]);
-  const [enabling,    setEnabling]    = useState(false);
+  const [connecting,  setConnecting]  = useState(false);
   const [loading,     setLoading]     = useState(true);
+  const pollRef = useRef(null);
 
   function loadDevicesAndCreds() {
     api.request("/api/access-control/devices")
@@ -4301,19 +4306,58 @@ function AccessControlTab({ api, show }) {
       if (s.connected) loadDevicesAndCreds();
     }).catch(err => show(err.message, "error"))
       .finally(() => setLoading(false));
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
-  async function handleEnable() {
-    setEnabling(true);
+  async function handleConnectLocks() {
+    setConnecting(true);
     try {
-      const result = await api.request("/api/access-control/enable", { method: "POST" });
-      setStatus({ connected: true, provider: "seam", name: "Seam" });
-      loadDevicesAndCreds();
-      show(`Smart lock access enabled — ${result.deviceCount} device(s) found`, "success");
+      const result = await api.request("/api/access-control/create-webview", { method: "POST" });
+      if (!result.webview_url) {
+        show("Could not start lock connection. Please try again.", "error");
+        setConnecting(false);
+        return;
+      }
+
+      const popup = window.open(
+        result.webview_url,
+        "SeamConnect",
+        "width=520,height=720,scrollbars=yes,resizable=yes"
+      );
+
+      // Poll every 3 s — when the popup closes, check if the webview completed
+      pollRef.current = setInterval(async () => {
+        if (!popup || popup.closed) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+          try {
+            const verify = await api.request("/api/access-control/verify-webview", {
+              method: "POST",
+              body: JSON.stringify({ webviewId: result.webview_id }),
+            });
+            if (verify.success) {
+              // Reload full status + devices after successful connection
+              const [s, r] = await Promise.all([
+                api.request("/api/access-control/status"),
+                api.request("/api/rooms"),
+              ]);
+              setStatus(s);
+              setRooms(Array.isArray(r) ? r : []);
+              loadDevicesAndCreds();
+              show(`Locks connected — ${verify.device_count} device(s) found`, "success");
+            } else {
+              show("Lock connection was not completed. Please try again.", "info");
+            }
+          } catch (err) {
+            show(err.message, "error");
+          } finally {
+            setConnecting(false);
+          }
+        }
+      }, 3000);
     } catch (err) {
       show(err.message, "error");
-    } finally {
-      setEnabling(false);
+      setConnecting(false);
     }
   }
 
@@ -4348,46 +4392,61 @@ function AccessControlTab({ api, show }) {
     <div className="stack">
       <h2>Access Control</h2>
       <p className="muted">
-        Enable smart lock access so guests receive a time-bound digital credential at check-in —
-        no physical key needed. Powered by Seam.
+        Connect your smart locks so guests receive a time-bound digital access code at check-in —
+        automatically revoked at checkout. No physical key needed. Powered by Seam.
       </p>
 
       {!status?.connected ? (
         <div className="panel stack">
-          <h3>Enable Smart Lock Access</h3>
+          <h3>Connect Your Smart Locks</h3>
           <p className="muted" style={{ fontSize: 13 }}>
-            Once enabled, guests will automatically receive digital credentials to access their rooms
-            at check-in. Credentials are revoked automatically at checkout.
+            A secure authorisation window will open. Log in with your lock brand account
+            to connect your devices to Zynloc.
           </p>
           <p className="muted" style={{ fontSize: 13 }}>
-            Supported locks: BLE, NFC, RFID, keypad — all major brands including SALTO, Assa Abloy,
-            Schlage, Yale, and Igloohome.
+            Supported brands: August, Yale, Schlage, SALTO, Igloohome, Dormakaba, Kwikset, Latch, and more.
           </p>
           <button
             className="primary"
-            onClick={handleEnable}
-            disabled={enabling}
+            onClick={handleConnectLocks}
+            disabled={connecting}
           >
             <ShieldCheck size={16} />
-            {enabling ? "Enabling…" : "Enable Smart Lock Access"}
+            {connecting ? "Opening connection window…" : "🔐 Connect Smart Locks"}
           </button>
+          {connecting && (
+            <p className="muted" style={{ fontSize: 12, textAlign: "center" }}>
+              Complete the authorisation in the popup window. This page will update automatically when done.
+            </p>
+          )}
         </div>
       ) : (
         <div className="stack">
           <div className="panel" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
-              <div style={{ fontWeight: 700 }}><CheckCircle size={14} style={{ marginRight: 6, color: "var(--green, #4caf50)" }} />Smart Lock Access Enabled</div>
+              <div style={{ fontWeight: 700 }}>
+                <CheckCircle size={14} style={{ marginRight: 6, color: "var(--green, #4caf50)" }} />
+                Smart Locks Connected
+              </div>
               <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                {devices.length} device{devices.length !== 1 ? "s" : ""} available
+                {devices.length} device{devices.length !== 1 ? "s" : ""} available · credentials issued automatically at check-in
               </div>
             </div>
-            <button className="ghost sm danger" onClick={handleDisable}>Disable</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="ghost sm" onClick={handleConnectLocks} disabled={connecting}>
+                {connecting ? "Opening…" : "Connect More"}
+              </button>
+              <button className="ghost sm danger" onClick={handleDisable}>Disconnect</button>
+            </div>
           </div>
 
-          <h3>Lock Devices</h3>
+          <h3>Map Locks to Rooms</h3>
+          <p className="muted" style={{ fontSize: 13 }}>
+            Assign each lock to the room it controls. Guests will receive a code for their specific room only.
+          </p>
           {devices.length === 0 ? (
             <p className="muted" style={{ fontSize: 13 }}>
-              No lock devices found. Make sure your locks are connected in your Seam dashboard at seam.cool
+              No devices found. Make sure your locks are powered on and connected in your lock brand app.
             </p>
           ) : (
             <div className="cards">
@@ -4427,7 +4486,7 @@ function AccessControlTab({ api, show }) {
           <h3>Recent Credentials</h3>
           {credentials.length === 0 ? (
             <p className="muted" style={{ fontSize: 13 }}>
-              No credentials issued yet. Credentials are automatically issued when guests check in.
+              No credentials issued yet. Credentials are automatically created when guests check in.
             </p>
           ) : (
             <div style={{ overflowX: "auto" }}>

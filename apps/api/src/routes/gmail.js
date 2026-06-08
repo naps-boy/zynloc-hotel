@@ -101,9 +101,14 @@ async function getValidToken(int, hotelId) {
 // ── GET /api/gmail/auth-url ───────────────────────────────────────────────────
 gmailRouter.get("/auth-url", requireAuth, asyncHandler(async (req, res) => {
   if (!config.googleClientId || config.googleClientId === "PLACEHOLDER_REPLACE_WITH_REAL") {
-    throw new HttpError(503, "Gmail integration not configured yet. Please add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your Render environment variables.");
+    // Return 200 with configured: false so the frontend can show "Coming Soon"
+    // (throwing a 5xx here would surface as "Internal server error" in production)
+    return res.json({
+      configured: false,
+      error: "Gmail integration is not yet configured. Please contact Zynloc support to enable this feature.",
+    });
   }
-  res.json({ url: buildAuthUrl(req.user.hotelId) });
+  res.json({ configured: true, url: buildAuthUrl(req.user.hotelId) });
 }));
 
 // ── GET /api/gmail/callback ───────────────────────────────────────────────────
