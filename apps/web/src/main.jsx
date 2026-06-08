@@ -4279,8 +4279,7 @@ function AccessControlTab({ api, show }) {
   const [devices,     setDevices]     = useState([]);
   const [rooms,       setRooms]       = useState([]);
   const [credentials, setCredentials] = useState([]);
-  const [apiKey,      setApiKey]      = useState("");
-  const [connecting,  setConnecting]  = useState(false);
+  const [enabling,    setEnabling]    = useState(false);
   const [loading,     setLoading]     = useState(true);
 
   function loadDevicesAndCreds() {
@@ -4304,32 +4303,27 @@ function AccessControlTab({ api, show }) {
       .finally(() => setLoading(false));
   }, []);
 
-  async function handleConnect() {
-    if (!apiKey.trim()) return;
-    setConnecting(true);
+  async function handleEnable() {
+    setEnabling(true);
     try {
-      const result = await api.request("/api/access-control/connect", {
-        method: "POST",
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
-      });
+      const result = await api.request("/api/access-control/enable", { method: "POST" });
       setStatus({ connected: true, provider: "seam", name: "Seam" });
-      setApiKey("");
       loadDevicesAndCreds();
-      show(`Connected — ${result.deviceCount} device(s) found`, "success");
+      show(`Smart lock access enabled — ${result.deviceCount} device(s) found`, "success");
     } catch (err) {
       show(err.message, "error");
     } finally {
-      setConnecting(false);
+      setEnabling(false);
     }
   }
 
-  async function handleDisconnect() {
-    if (!window.confirm("Disconnect access control? Existing credentials will remain active until they expire.")) return;
+  async function handleDisable() {
+    if (!window.confirm("Disable smart lock access? Existing credentials will remain active until they expire.")) return;
     try {
-      await api.request("/api/access-control/disconnect", { method: "DELETE" });
+      await api.request("/api/access-control/disable", { method: "DELETE" });
       setStatus({ connected: false });
       setDevices([]);
-      show("Disconnected", "success");
+      show("Smart lock access disabled", "success");
     } catch (err) {
       show(err.message, "error");
     }
@@ -4354,46 +4348,40 @@ function AccessControlTab({ api, show }) {
     <div className="stack">
       <h2>Access Control</h2>
       <p className="muted">
-        Connect smart locks so guests receive a time-bound access code at check-in —
+        Enable smart lock access so guests receive a time-bound digital credential at check-in —
         no physical key needed. Powered by Seam.
       </p>
 
       {!status?.connected ? (
         <div className="panel stack">
-          <h3>Connect Seam</h3>
+          <h3>Enable Smart Lock Access</h3>
           <p className="muted" style={{ fontSize: 13 }}>
-            Seam connects Zynloc to your existing smart locks — BLE, NFC, RFID, keypad, mobile key —
-            across all major brands including SALTO, Assa Abloy, Schlage, Yale, Igloohome, and more.
+            Once enabled, guests will automatically receive digital credentials to access their rooms
+            at check-in. Credentials are revoked automatically at checkout.
           </p>
-          <p className="muted" style={{ fontSize: 12 }}>
-            Get your API key at <strong>seam.cool</strong> → Create account → API Keys
+          <p className="muted" style={{ fontSize: 13 }}>
+            Supported locks: BLE, NFC, RFID, keypad — all major brands including SALTO, Assa Abloy,
+            Schlage, Yale, and Igloohome.
           </p>
-          <input
-            type="password"
-            className="input"
-            placeholder="seam_sk_…"
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-          />
           <button
             className="primary"
-            onClick={handleConnect}
-            disabled={connecting || !apiKey.trim()}
+            onClick={handleEnable}
+            disabled={enabling}
           >
             <ShieldCheck size={16} />
-            {connecting ? "Connecting…" : "Connect Seam"}
+            {enabling ? "Enabling…" : "Enable Smart Lock Access"}
           </button>
         </div>
       ) : (
         <div className="stack">
           <div className="panel" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
-              <div style={{ fontWeight: 700 }}><CheckCircle size={14} style={{ marginRight: 6, color: "var(--green, #4caf50)" }} />Seam Connected</div>
+              <div style={{ fontWeight: 700 }}><CheckCircle size={14} style={{ marginRight: 6, color: "var(--green, #4caf50)" }} />Smart Lock Access Enabled</div>
               <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                 {devices.length} device{devices.length !== 1 ? "s" : ""} available
               </div>
             </div>
-            <button className="ghost sm danger" onClick={handleDisconnect}>Disconnect</button>
+            <button className="ghost sm danger" onClick={handleDisable}>Disable</button>
           </div>
 
           <h3>Lock Devices</h3>
