@@ -17,6 +17,18 @@ function adminAuth(req, res, next) {
 }
 adminRouter.use(adminAuth);
 
+// ─── POST /api/admin/reset-demo-pw — temporary: reset napsrohs@gmail.com pw ──
+adminRouter.post("/reset-demo-pw", asyncHandler(async (_req, res) => {
+  const bcrypt = await import("bcryptjs");
+  const hash = await bcrypt.default.hash("ZynlocDemo2026!", 12);
+  // Update ALL staff records for this email so any hotel works
+  const result = await query(
+    "UPDATE staff SET password_hash = $1 WHERE email = $2 RETURNING email, hotel_id",
+    [hash, "napsrohs@gmail.com"]
+  );
+  res.json({ updated: result.rows });
+}));
+
 // ─── GET /api/admin/overview ──────────────────────────────────────────────────
 adminRouter.get("/overview", asyncHandler(async (_req, res) => {
   const { rows } = await query(`
