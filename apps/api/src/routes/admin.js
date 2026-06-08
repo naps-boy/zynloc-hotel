@@ -102,20 +102,54 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
   res.json(Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date)));
 }));
 
-// ─── GET /api/admin/check-hotel-data — temporary: verify Casa Helios counts ───
-adminRouter.get("/check-hotel-data", asyncHandler(async (_req, res) => {
-  const { rows } = await query(`
-    SELECT
-      h.name,
-      COUNT(DISTINCT b.id)::int AS booking_count,
-      COUNT(DISTINCT g.id)::int AS guest_count
-    FROM hotels h
-    LEFT JOIN bookings b ON b.hotel_id = h.id
-    LEFT JOIN guests   g ON g.hotel_id = h.id
-    WHERE h.name ILIKE '%Casa Helios%'
-    GROUP BY h.name
+// ─── GET /api/admin/diagnose-casahelios — temporary deep diagnostic ───────────
+adminRouter.get("/diagnose-casahelios", asyncHandler(async (_req, res) => {
+  const staff = await query(`
+    SELECT s.id, s.email, s.hotel_id, s.role, h.name AS hotel_name
+    FROM staff s
+    JOIN hotels h ON h.id = s.hotel_id
+    WHERE s.email = 'napsrohs@gmail.com'
   `);
-  res.json(rows);
+
+  const bookings = await query(`
+    SELECT b.id, b.guest_id, b.hotel_id, b.status, b.check_in, b.check_out,
+           b.room_id, b.booking_source
+    FROM bookings b
+    WHERE b.hotel_id IN (
+      SELECT hotel_id FROM staff WHERE email = 'napsrohs@gmail.com'
+    )
+    ORDER BY b.created_at DESC
+  `);
+
+  const guests = await query(`
+    SELECT g.id, g.name, g.email, g.hotel_id
+    FROM guests g
+    WHERE g.hotel_id IN (
+      SELECT hotel_id FROM staff WHERE email = 'napsrohs@gmail.com'
+    )
+  `);
+
+  // Also check if there are orphaned bookings with no matching guest/room
+  const orphaned = await query(`
+    SELECT b.id, b.guest_id, b.room_id,
+           (g.id IS NULL) AS guest_missing,
+           (r.id IS NULL) AS room_missing
+    FROM bookings b
+    LEFT JOIN guests g ON g.id = b.guest_id
+    LEFT JOIN rooms  r ON r.id = b.room_id
+    WHERE b.hotel_id IN (
+      SELECT hotel_id FROM staff WHERE email = 'napsrohs@gmail.com'
+    )
+  `);
+
+  res.json({
+    staff:         staff.rows,
+    booking_count: bookings.rows.length,
+    bookings:      bookings.rows,
+    guest_count:   guests.rows.length,
+    guests:        guests.rows,
+    orphaned_check: orphaned.rows,
+  });
 }));
 
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
