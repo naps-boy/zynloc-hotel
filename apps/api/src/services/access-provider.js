@@ -112,6 +112,28 @@ export class AccessProvider {
   }
 }
 
+// ── Seam HTTP helper — no SDK, direct REST calls ─────────────────────────────
+// The Seam SDK weighs 74 MB — far too large for Render free tier (512 MB RAM).
+// We use native fetch against the Seam REST API instead. Same functionality,
+// zero extra dependencies, minimal memory footprint.
+
+async function seamRequest(apiKey, method, path, body) {
+  const res = await fetch("https://connect.getseam.com" + path, {
+    method,
+    headers: {
+      "Authorization":  "Bearer " + apiKey,
+      "Content-Type":   "application/json",
+      "seam-sdk-name":  "zynloc-hotel",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error?.message || json?.message || `Seam HTTP ${res.status}`);
+  }
+  return json;
+}
+
 // ── Seam Provider Implementation ──────────────────────────────────────────────
 
 class SeamProvider {
@@ -121,15 +143,9 @@ class SeamProvider {
     this.workspaceId = config.workspace_id;
   }
 
-  async getClient() {
-    const { Seam } = await import("seam");
-    return new Seam({ apiKey: this.apiKey });
-  }
-
   async listDevices() {
-    const seam = await this.getClient();
-    const devices = await seam.devices.list();
-    return devices.map(d => ({
+    const data = await seamRequest(this.apiKey, "POST", "/devices/list", {});
+    return (data.devices || []).map(d => ({
       deviceId:     d.device_id,
       name:         d.properties?.name || d.device_id,
       type:         d.device_type,
@@ -139,23 +155,24 @@ class SeamProvider {
   }
 
   async issueCredential({ deviceId, validFrom, validUntil, credentialType }) {
-    const seam = await this.getClient();
-    const accessCode = await seam.accessCodes.create({
+    const data = await seamRequest(this.apiKey, "POST", "/access_codes/create", {
       device_id:  deviceId,
       name:       `Zynloc-${credentialType}-${Date.now()}`,
       starts_at:  validFrom.toISOString(),
       ends_at:    validUntil.toISOString(),
     });
+    const ac = data.access_code;
     return {
-      externalId:  accessCode.access_code_id,
-      accessCode:  accessCode.code,
+      externalId:  ac.access_code_id,
+      accessCode:  ac.code,
       startsAt:    validFrom,
       endsAt:      validUntil,
     };
   }
 
   async revokeCredential(externalCredentialId) {
-    const seam = await this.getClient();
-    await seam.accessCodes.delete({ access_code_id: externalCredentialId });
+    await seamRequest(this.apiKey, "POST", "/access_codes/delete", {
+      access_code_id: externalCredentialId,
+    });
   }
 }

@@ -31,13 +31,21 @@ accessControlRouter.post("/connect", asyncHandler(async (req, res) => {
   const { apiKey, workspaceId, providerType = "seam" } = req.body;
   if (!apiKey) throw new HttpError(400, "API key required");
 
-  // Verify the API key works by listing devices
+  // Verify the API key works by listing devices — direct fetch, no SDK
   let deviceCount = 0;
   try {
-    const { Seam } = await import("seam");
-    const seam = new Seam({ apiKey });
-    const devices = await seam.devices.list();
-    deviceCount = devices.length;
+    const res = await fetch("https://connect.getseam.com/devices/list", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + apiKey,
+        "Content-Type":  "application/json",
+        "seam-sdk-name": "zynloc-hotel",
+      },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error?.message || data?.message || `HTTP ${res.status}`);
+    deviceCount = (data.devices || []).length;
   } catch (err) {
     throw new HttpError(400, "Invalid Seam API key: " + err.message);
   }
