@@ -34,8 +34,8 @@ bookingsRouter.get("/", asyncHandler(async (req, res) => {
             q.token qr_token, q.qr_data_url,
             p.name package_name
        FROM bookings b
-       JOIN guests g ON g.id = b.guest_id
-       JOIN rooms  r ON r.id = b.room_id
+       LEFT JOIN guests g ON g.id = b.guest_id
+       LEFT JOIN rooms  r ON r.id = b.room_id
        LEFT JOIN qr_codes q ON q.booking_id = b.id
        LEFT JOIN packages p ON p.id = b.package_id
       WHERE b.hotel_id = $1
