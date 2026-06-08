@@ -44,9 +44,14 @@ authRouter.post("/login", asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT s.*, h.name hotel_name, h.logo_url
        FROM staff s JOIN hotels h ON h.id = s.hotel_id
-      WHERE s.email = $1`,
+      WHERE s.email = $1
+      ORDER BY s.created_at DESC`,
     [body.email.toLowerCase()]
   );
+  // When a manager has registered more than one hotel with the same email,
+  // rows[0] is the most-recently-created staff/hotel pair (ORDER BY created_at DESC).
+  // bcrypt.compare is run only on rows[0] — same password hash is set on every staff
+  // record for a given user, so whichever row wins, the hash check is correct.
   const validStaff = rows[0] && await bcrypt.compare(body.password, rows[0].password_hash) ? rows[0] : null;
   if (!validStaff) throw new HttpError(401, "Invalid credentials");
 
