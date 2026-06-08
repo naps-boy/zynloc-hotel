@@ -13,9 +13,9 @@ serviceRequestsRouter.get("/", asyncHandler(async (req, res) => {
     `SELECT sr.*, g.name guest_name, g.selfie_url, r.number room_number,
             s.name assigned_staff_name
        FROM service_requests sr
-       JOIN guests  g ON g.id = sr.guest_id
-       JOIN bookings b ON b.id = sr.booking_id
-       JOIN rooms   r ON r.id = b.room_id
+       LEFT JOIN guests  g ON g.id = sr.guest_id
+       LEFT JOIN bookings b ON b.id = sr.booking_id
+       LEFT JOIN rooms   r ON r.id = b.room_id
        LEFT JOIN staff s ON s.id = sr.assigned_staff_id
       WHERE sr.hotel_id = $1
       ORDER BY sr.created_at DESC`,

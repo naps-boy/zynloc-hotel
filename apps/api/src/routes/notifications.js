@@ -37,5 +37,6 @@ notificationsRouter.put("/:id/read", asyncHandler(async (req, res) => {
     "UPDATE notifications SET read_at = NOW() WHERE id = $1 AND hotel_id = $2 RETURNING *",
     [req.params.id, req.user.hotelId]
   );
+  if (!rows[0]) return res.status(404).json({ error: "Notification not found" });
   res.json(rows[0]);
 }));

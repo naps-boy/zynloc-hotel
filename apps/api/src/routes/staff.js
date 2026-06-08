@@ -55,5 +55,6 @@ staffRouter.put("/tasks/:id", asyncHandler(async (req, res) => {
     "UPDATE tasks SET status = $3 WHERE id = $1 AND hotel_id = $2 RETURNING *",
     [req.params.id, req.user.hotelId, body.status]
   );
+  if (!rows[0]) return res.status(404).json({ error: "Task not found" });
   res.json(rows[0]);
 }));

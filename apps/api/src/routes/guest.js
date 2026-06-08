@@ -277,10 +277,17 @@ guestRouter.post("/:token/checkout", requireValidQr, asyncHandler(async (req, re
   emitHotel(req.qr.hotel_id, "bookings:changed", {});
   emitHotel(req.qr.hotel_id, "rooms:changed", {});
 
-  const hotel = (await query("SELECT * FROM hotels WHERE id = $1", [req.qr.hotel_id])).rows[0];
-  const guest = (await query("SELECT * FROM guests WHERE id = $1", [req.qr.guest_id])).rows[0];
-  const booking = (await query("SELECT * FROM bookings WHERE id = $1", [req.qr.booking_id])).rows[0];
-  await sendCheckoutReceipt({ guest, hotel, booking: { ...booking, room_number: req.qr.room_number } });
+  const [hotelRes, guestRes, bookingRes] = await Promise.all([
+    query("SELECT * FROM hotels  WHERE id = $1", [req.qr.hotel_id]),
+    query("SELECT * FROM guests  WHERE id = $1", [req.qr.guest_id]),
+    query("SELECT * FROM bookings WHERE id = $1", [req.qr.booking_id]),
+  ]);
+  const hotel   = hotelRes.rows[0];
+  const guest   = guestRes.rows[0];
+  const booking = bookingRes.rows[0];
+  if (hotel && guest && booking) {
+    await sendCheckoutReceipt({ guest, hotel, booking: { ...booking, room_number: req.qr.room_number } });
+  }
   createAlert({
     hotelId:   req.qr.hotel_id,
     type:      "checkout",
@@ -318,10 +325,17 @@ guestRouter.post("/:token/checkout-scan", requireValidQr, asyncHandler(async (re
 
   emitHotel(req.qr.hotel_id, "bookings:changed", {});
   emitHotel(req.qr.hotel_id, "rooms:changed", {});
-  const hotel = (await query("SELECT * FROM hotels WHERE id = $1", [req.qr.hotel_id])).rows[0];
-  const guest = (await query("SELECT * FROM guests WHERE id = $1", [req.qr.guest_id])).rows[0];
-  const booking = (await query("SELECT * FROM bookings WHERE id = $1", [req.qr.booking_id])).rows[0];
-  await sendCheckoutReceipt({ guest, hotel, booking: { ...booking, room_number: req.qr.room_number } });
+  const [hotelRes2, guestRes2, bookingRes2] = await Promise.all([
+    query("SELECT * FROM hotels  WHERE id = $1", [req.qr.hotel_id]),
+    query("SELECT * FROM guests  WHERE id = $1", [req.qr.guest_id]),
+    query("SELECT * FROM bookings WHERE id = $1", [req.qr.booking_id]),
+  ]);
+  const hotel2   = hotelRes2.rows[0];
+  const guest2   = guestRes2.rows[0];
+  const booking2 = bookingRes2.rows[0];
+  if (hotel2 && guest2 && booking2) {
+    await sendCheckoutReceipt({ guest: guest2, hotel: hotel2, booking: { ...booking2, room_number: req.qr.room_number } });
+  }
   createAlert({
     hotelId:   req.qr.hotel_id,
     type:      "checkout",

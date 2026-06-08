@@ -6,7 +6,6 @@ import { createBookingFromDraft } from "../services/bookings.js";
 import { emitHotel, emitBooking } from "../services/realtime.js";
 import { asyncHandler, HttpError } from "../utils/http.js";
 import { sendBookingConfirmation } from "../services/email.js";
-import { query as dbQuery } from "../db/pool.js";
 
 export const bookingsRouter = Router();
 bookingsRouter.use(requireAuth);

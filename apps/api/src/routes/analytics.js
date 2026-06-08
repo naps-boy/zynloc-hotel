@@ -11,8 +11,9 @@ analyticsRouter.get("/", asyncHandler(async (req, res) => {
   const [rooms, bookings, scans] = await Promise.all([
     query("SELECT id, number, type FROM rooms WHERE hotel_id = $1", [hotelId]),
     query(
-      `SELECT b.*, r.number room_number, r.type room_type, r.price_per_night
-         FROM bookings b JOIN rooms r ON r.id = b.room_id
+      `SELECT b.*, r.number room_number, r.type room_type,
+              COALESCE(r.price_per_night, 0) AS price_per_night
+         FROM bookings b LEFT JOIN rooms r ON r.id = b.room_id
         WHERE b.hotel_id = $1 AND b.status <> 'cancelled'`,
       [hotelId]
     ),

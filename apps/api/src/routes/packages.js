@@ -17,15 +17,23 @@ packagesRouter.get("/", asyncHandler(async (req, res) => {
     "SELECT * FROM packages WHERE hotel_id = $1 ORDER BY name",
     [req.user.hotelId]
   )).rows;
-  for (const pkg of pkgs) {
-    const fids = (await query(
-      "SELECT facility_id FROM package_facilities WHERE package_id = $1",
-      [pkg.id]
+
+  // Batch-load all facility associations in one query (avoids N+1)
+  const facilityMap = {};
+  if (pkgs.length) {
+    const fRows = (await query(
+      `SELECT package_id, array_agg(facility_id) AS facility_ids
+         FROM package_facilities
+        WHERE package_id = ANY($1)
+        GROUP BY package_id`,
+      [pkgs.map(p => p.id)]
     )).rows;
-    pkg.facility_ids = fids.map(r => r.facility_id);
+    for (const r of fRows) facilityMap[r.package_id] = r.facility_ids;
   }
-  cache.set(cacheKey, pkgs);
-  res.json(pkgs);
+
+  const result = pkgs.map(p => ({ ...p, facility_ids: facilityMap[p.id] || [] }));
+  cache.set(cacheKey, result);
+  res.json(result);
 }));
 
 packagesRouter.post("/", asyncHandler(async (req, res) => {

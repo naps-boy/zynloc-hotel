@@ -102,6 +102,22 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
   res.json(Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date)));
 }));
 
+// ─── GET /api/admin/check-hotel-data — temporary: verify Casa Helios counts ───
+adminRouter.get("/check-hotel-data", asyncHandler(async (_req, res) => {
+  const { rows } = await query(`
+    SELECT
+      h.name,
+      COUNT(DISTINCT b.id)::int AS booking_count,
+      COUNT(DISTINCT g.id)::int AS guest_count
+    FROM hotels h
+    LEFT JOIN bookings b ON b.hotel_id = h.id
+    LEFT JOIN guests   g ON g.hotel_id = h.id
+    WHERE h.name ILIKE '%Casa Helios%'
+    GROUP BY h.name
+  `);
+  res.json(rows);
+}));
+
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
 adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   const { rows } = await query(`

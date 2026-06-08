@@ -15,8 +15,8 @@ reportsRouter.get("/bookings.csv", asyncHandler(async (req, res) => {
     `SELECT b.id, g.name guest_name, g.email guest_email, r.number room_number, r.type room_type,
             b.package_type, b.promo_code, b.check_in, b.check_out, b.status, b.amount
        FROM bookings b
-       JOIN guests g ON g.id = b.guest_id
-       JOIN rooms r ON r.id = b.room_id
+       LEFT JOIN guests g ON g.id = b.guest_id
+       LEFT JOIN rooms r ON r.id = b.room_id
       WHERE b.hotel_id = $1
       ORDER BY b.check_in DESC`,
     [req.user.hotelId]
