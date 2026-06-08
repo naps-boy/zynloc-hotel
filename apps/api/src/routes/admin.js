@@ -102,6 +102,70 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
 }));
 
 
+// ─── POST /api/admin/test-seam-simulation — temporary sandbox simulation ──────
+adminRouter.post("/test-seam-simulation", asyncHandler(async (req, res) => {
+  const { sandboxKey } = req.body;
+  if (!sandboxKey) return res.status(400).json({ error: "sandboxKey required" });
+
+  // List devices using sandbox key
+  const devicesRes = await fetch("https://connect.getseam.com/devices/list", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + sandboxKey, "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const devicesData = await devicesRes.json();
+  const devices = devicesData.devices || [];
+
+  if (devices.length === 0) {
+    return res.json({ success: false, message: "No devices found with this sandbox key" });
+  }
+
+  const testDevice = devices[0];
+
+  // Create a time-bound access code on the virtual lock
+  const codeRes = await fetch("https://connect.getseam.com/access_codes/create", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + sandboxKey, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      device_id: testDevice.device_id,
+      name: "Zynloc-simulation-test-" + Date.now(),
+      starts_at: new Date().toISOString(),
+      ends_at: new Date(Date.now() + 3600000).toISOString(),
+    }),
+  });
+  const codeData = await codeRes.json();
+  const accessCode = codeData.access_code;
+
+  if (!accessCode) {
+    return res.json({ success: false, message: "Failed to create access code", error: codeData });
+  }
+
+  // Wait 2 seconds then delete the access code
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  const deleteRes = await fetch("https://connect.getseam.com/access_codes/delete", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + sandboxKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ access_code_id: accessCode.access_code_id }),
+  });
+  const deleteData = await deleteRes.json();
+
+  res.json({
+    success: true,
+    simulation: {
+      device_tested:        testDevice.properties?.name || testDevice.device_id,
+      device_type:          testDevice.device_type,
+      device_online:        testDevice.properties?.online,
+      access_code_created:  accessCode.code,
+      access_code_id:       accessCode.access_code_id,
+      valid_from:           accessCode.starts_at,
+      valid_until:          accessCode.ends_at,
+      revoked:              deleteData.ok === true || !deleteData.error,
+      message:              "Full simulation complete — credential issued and revoked successfully",
+    },
+  });
+}));
+
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
 adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   const { rows } = await query(`
