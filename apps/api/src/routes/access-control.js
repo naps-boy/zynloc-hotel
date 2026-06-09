@@ -174,25 +174,6 @@ accessControlRouter.post("/verify-webview", asyncHandler(async (req, res) => {
   });
 }));
 
-// ─── GET /api/access-control/test-webview-create — TEMP DIAGNOSTIC ───────────
-
-accessControlRouter.get("/test-webview-create", asyncHandler(async (req, res) => {
-  const seamKey = process.env.SEAM_API_KEY;
-  console.log("[test-webview-create] SEAM_API_KEY exists:", !!seamKey, "length:", seamKey?.length);
-  const result = await fetch("https://connect.getseam.com/connect_webviews/create", {
-    method: "POST",
-    headers: { "Authorization": "Bearer " + seamKey, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      accepted_providers: ["august", "schlage", "yale"],
-      custom_metadata: { hotel_id: req.user.hotelId },
-    }),
-  });
-  const data = await result.json();
-  console.log("[test-webview-create] Seam response status:", result.status);
-  console.log("[test-webview-create] Seam response body:", JSON.stringify(data));
-  res.json({ http_status: result.status, seam_response: data });
-}));
-
 // ─── GET /api/access-control/devices ─────────────────────────────────────────
 
 accessControlRouter.get("/devices", asyncHandler(async (req, res) => {
