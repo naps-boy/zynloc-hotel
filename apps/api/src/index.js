@@ -29,7 +29,7 @@ import { alertsRouter }          from "./routes/alerts.js";
 import { adminRouter }           from "./routes/admin.js";
 import { importRouter }         from "./routes/import.js";
 import { activityLogRouter }    from "./routes/activity-log.js";
-import { gmailRouter }          from "./routes/gmail.js";
+import { gmailRouter, scanHotelGmailInbox } from "./routes/gmail.js";
 import { accessControlRouter }  from "./routes/access-control.js";
 import { attachRealtime }        from "./services/realtime.js";
 import { startLateCheckoutMonitor } from "./jobs/lateCheckout.js";
@@ -120,6 +120,32 @@ await runMigrations();
 server.listen(cfg.port, () => {
   console.log(`Zynloc API listening on ${cfg.port}`);
   startLateCheckoutMonitor();
+
+  // ── Gmail auto-scan — every 30 minutes, scans all connected inboxes ─────────
+  // One hotel failure does NOT stop others — full error isolation per hotel.
+  // Scan results are not auto-imported; staff still confirm via the UI.
+  async function autoScanAllGmailAccounts() {
+    try {
+      const { rows: integrations } = await pool.query(
+        "SELECT hotel_id FROM email_integrations WHERE is_active = true AND provider = 'gmail'"
+      );
+      if (!integrations.length) return;
+      console.log(`[Gmail] Auto-scan: ${integrations.length} connected hotel(s)`);
+      for (const { hotel_id } of integrations) {
+        try {
+          const result = await scanHotelGmailInbox(hotel_id);
+          if (result.found > 0) {
+            console.log(`[Gmail] Hotel ${hotel_id}: ${result.found} new booking email(s) awaiting import`);
+          }
+        } catch (err) {
+          console.error(`[Gmail] Auto-scan failed for hotel ${hotel_id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error("[Gmail] Auto-scan job error:", err.message);
+    }
+  }
+  setInterval(autoScanAllGmailAccounts, 30 * 60 * 1000).unref();
 
   // ── KYC document lifecycle ────────────────────────────────────────────────
   // Runs once per day: marks docs expiring within 30 days, deletes expired ones.

@@ -57,12 +57,11 @@ async function getGmailProfile(accessToken) {
   return res.json();
 }
 
-async function listMessages(accessToken, queryStr, maxResults = 20) {
+async function listMessages(accessToken, queryStr, maxResults = 20, pageToken = null) {
+  const params = { q: queryStr, maxResults: String(maxResults) };
+  if (pageToken) params.pageToken = pageToken;
   const res = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/messages?" + new URLSearchParams({
-      q:          queryStr,
-      maxResults: String(maxResults),
-    }),
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages?" + new URLSearchParams(params),
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   return res.json();
@@ -76,10 +75,11 @@ async function getMessage(accessToken, messageId) {
   return res.json();
 }
 
-// Get a valid access token — refresh if expired or close to expiry
+// Get a valid access token — refresh if expired or expiring within 5 minutes
 async function getValidToken(int, hotelId) {
-  const expiresAt = int.token_expiry ? new Date(int.token_expiry).getTime() : 0;
-  const needsRefresh = !int.access_token || expiresAt < Date.now() + 60_000;
+  const expiresAt   = int.token_expiry ? new Date(int.token_expiry).getTime() : 0;
+  // 5-minute buffer: refresh if token expires in the next 5 min
+  const needsRefresh = !int.access_token || expiresAt < Date.now() + 5 * 60 * 1000;
 
   if (!needsRefresh) return int.access_token;
 
@@ -96,6 +96,53 @@ async function getValidToken(int, hotelId) {
   ).catch(err => console.warn("[gmail token save]", err.message));
 
   return tokens.access_token;
+}
+
+// ── Shared scan logic — used by both the route and the background job ─────────
+export async function scanHotelGmailInbox(hotelId, { maxResults = 20, pageToken = null } = {}) {
+  const { rows } = await query(
+    "SELECT * FROM email_integrations WHERE hotel_id = $1 AND provider = 'gmail' AND is_active = true",
+    [hotelId]
+  );
+  if (!rows.length) return { found: 0, bookings: [], nextPageToken: null };
+
+  const accessToken = await getValidToken(rows[0], hotelId);
+  const queryStr = "from:(airbnb.com OR booking.com OR expedia.com OR vrbo.com OR tripadvisor.com OR hotels.com) subject:(reservation OR booking OR confirmation) newer_than:30d";
+
+  const safeMax = Math.min(maxResults, 100);
+  const list = await listMessages(accessToken, queryStr, safeMax, pageToken);
+
+  // Record this scan time regardless of whether emails were found
+  await query(
+    "UPDATE email_integrations SET last_scan_at = now(), updated_at = now() WHERE hotel_id = $1 AND provider = 'gmail'",
+    [hotelId]
+  ).catch(err => console.warn("[gmail last_scan_at]", err.message));
+
+  if (!list.messages?.length) return { found: 0, bookings: [], nextPageToken: null };
+
+  const parsedBookings = [];
+  // Cap per-request message fetches to avoid slow responses
+  const toFetch = list.messages.slice(0, Math.min(safeMax, 10));
+
+  for (const msg of toFetch) {
+    try {
+      const full   = await getMessage(accessToken, msg.id);
+      const parsed = parseOTAEmail(full);
+      if (!parsed) continue;
+
+      const { rows: existing } = await query(
+        "SELECT id FROM bookings WHERE hotel_id = $1 AND source_reference = $2",
+        [hotelId, msg.id]
+      );
+      if (!existing.length) {
+        parsedBookings.push({ ...parsed, gmail_message_id: msg.id });
+      }
+    } catch (e) {
+      console.error("[gmail scan parse]", e.message);
+    }
+  }
+
+  return { found: parsedBookings.length, bookings: parsedBookings, nextPageToken: list.nextPageToken || null };
 }
 
 // ── GET /api/gmail/auth-url ───────────────────────────────────────────────────
@@ -125,7 +172,7 @@ gmailRouter.get("/callback", asyncHandler(async (req, res) => {
     const tokens = await exchangeCode(code);
     if (tokens.error) throw new Error(tokens.error_description || tokens.error);
 
-    const profile = await getGmailProfile(tokens.access_token);
+    const profile      = await getGmailProfile(tokens.access_token);
     const emailAddress = profile.emailAddress;
 
     await query(
@@ -159,11 +206,28 @@ gmailRouter.get("/callback", asyncHandler(async (req, res) => {
 // ── GET /api/gmail/status ─────────────────────────────────────────────────────
 gmailRouter.get("/status", requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await query(
-    "SELECT email_address, is_active, updated_at FROM email_integrations WHERE hotel_id = $1 AND provider = 'gmail'",
+    "SELECT email_address, is_active, updated_at, last_scan_at FROM email_integrations WHERE hotel_id = $1 AND provider = 'gmail'",
     [req.user.hotelId]
   );
   if (!rows.length || !rows[0].is_active) return res.json({ connected: false });
-  res.json({ connected: true, email: rows[0].email_address, updated_at: rows[0].updated_at });
+
+  // Count bookings imported via Gmail (any OTA source that came through inbox scan)
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*)::int AS total
+       FROM bookings
+      WHERE hotel_id = $1
+        AND source_reference IS NOT NULL
+        AND booking_source IN ('airbnb','booking_com','expedia','vrbo','tripadvisor','hotels_com','gmail')`,
+    [req.user.hotelId]
+  );
+
+  res.json({
+    connected:        true,
+    email:            rows[0].email_address,
+    updated_at:       rows[0].updated_at,
+    last_scan_at:     rows[0].last_scan_at || null,
+    imported_count:   countRows[0].total,
+  });
 }));
 
 // ── DELETE /api/gmail/disconnect ──────────────────────────────────────────────
@@ -177,39 +241,12 @@ gmailRouter.delete("/disconnect", requireAuth, asyncHandler(async (req, res) => 
 
 // ── POST /api/gmail/scan ──────────────────────────────────────────────────────
 gmailRouter.post("/scan", requireAuth, asyncHandler(async (req, res) => {
-  const { rows } = await query(
-    "SELECT * FROM email_integrations WHERE hotel_id = $1 AND provider = 'gmail' AND is_active = true",
-    [req.user.hotelId]
-  );
-  if (!rows.length) throw new HttpError(400, "Gmail not connected");
+  // Optional pagination params
+  const maxResults = Math.min(parseInt(req.query.limit) || 20, 100);
+  const pageToken  = req.query.pageToken || null;
 
-  const accessToken = await getValidToken(rows[0], req.user.hotelId);
-  const queryStr = "from:(airbnb.com OR booking.com OR expedia.com OR vrbo.com) subject:(reservation OR booking OR confirmation) newer_than:30d";
-
-  const list = await listMessages(accessToken, queryStr, 20);
-  if (!list.messages?.length) return res.json({ found: 0, bookings: [] });
-
-  const parsedBookings = [];
-
-  for (const msg of list.messages.slice(0, 10)) {
-    try {
-      const full = await getMessage(accessToken, msg.id);
-      const parsed = parseOTAEmail(full);
-      if (!parsed) continue;
-
-      const { rows: existing } = await query(
-        "SELECT id FROM bookings WHERE hotel_id = $1 AND source_reference = $2",
-        [req.user.hotelId, msg.id]
-      );
-      if (!existing.length) {
-        parsedBookings.push({ ...parsed, gmail_message_id: msg.id });
-      }
-    } catch (e) {
-      console.error("[gmail scan parse]", e.message);
-    }
-  }
-
-  res.json({ found: parsedBookings.length, bookings: parsedBookings });
+  const result = await scanHotelGmailInbox(req.user.hotelId, { maxResults, pageToken });
+  res.json(result);
 }));
 
 // ── POST /api/gmail/confirm-import ────────────────────────────────────────────
@@ -280,9 +317,11 @@ gmailRouter.post("/confirm-import", requireAuth, asyncHandler(async (req, res) =
 function parseOTAEmail(messageData) {
   try {
     const headers = messageData.payload?.headers || [];
-    const from    = headers.find(h => h.name === "From")?.value    || "";
-    const subject = headers.find(h => h.name === "Subject")?.value || "";
+    const from    = headers.find(h => h.name.toLowerCase() === "from")?.value    || "";
+    const subject = headers.find(h => h.name.toLowerCase() === "subject")?.value || "";
+    const date    = headers.find(h => h.name.toLowerCase() === "date")?.value    || "";
 
+    // Extract body — plain text preferred, fall back to HTML stripped of tags
     let body = "";
     function extractBody(part) {
       if (part.mimeType === "text/plain" && part.body?.data) {
@@ -295,28 +334,37 @@ function parseOTAEmail(messageData) {
     }
     extractBody(messageData.payload);
 
+    // Determine booking source from sender domain
     let source = "gmail";
-    if (from.includes("airbnb"))       source = "airbnb";
-    else if (from.includes("booking")) source = "booking_com";
-    else if (from.includes("expedia")) source = "expedia";
-    else if (from.includes("vrbo"))    source = "vrbo";
+    const fromLower = from.toLowerCase();
+    if      (fromLower.includes("airbnb"))       source = "airbnb";
+    else if (fromLower.includes("booking.com"))  source = "booking_com";
+    else if (fromLower.includes("expedia"))      source = "expedia";
+    else if (fromLower.includes("vrbo"))         source = "vrbo";
+    else if (fromLower.includes("tripadvisor"))  source = "tripadvisor";
+    else if (fromLower.includes("hotels.com"))   source = "hotels_com";
 
+    // Guest name — multiple patterns, most specific first
     const namePatterns = [
-      /Guest\s+name[:\s]+([A-Za-zÀ-ÿ\s\-'\.]{2,50})/i,
-      /Reservation\s+for[:\s]+([A-Za-zÀ-ÿ\s\-'\.]{2,50})/i,
-      /Booked\s+by[:\s]+([A-Za-zÀ-ÿ\s\-'\.]{2,50})/i,
-      /Name[:\s]+([A-Za-zÀ-ÿ\s\-'\.]{2,50})/i,
-      /Guest[:\s]+([A-Za-zÀ-ÿ\s\-'\.]{2,50})/i,
+      /(?:Guest|Customer|Traveler|Booker)\s*(?:name|Name)[:\s]+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-'\.]{1,50})/i,
+      /(?:Reservation|Booking)\s+for\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-'\.]{1,50})/i,
+      /Booked\s+by[:\s]+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-'\.]{1,50})/i,
+      /Hi\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-']{1,30}),/i,
+      /Dear\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-']{1,30}),/i,
+      /Name[:\s]+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-'\.]{1,50})/i,
+      /Guest[:\s]+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-'\.]{1,50})/i,
     ];
     let guestName = null;
     for (const p of namePatterns) {
       const m = body.match(p);
-      if (m) { guestName = m[1].trim().replace(/\s+/g, " "); break; }
+      if (m && m[1].trim().length > 2) { guestName = m[1].trim().replace(/\s+/g, " "); break; }
     }
 
+    // Check-in date — ISO, US and EU formats
     const checkInPatterns = [
-      /Check[\s\-]in[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Arrival[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /(?:Check[\s\-]?in|Arrival|From)\s*[:\-]?\s*(\d{4}[\-\/]\d{2}[\-\/]\d{2})/i,
+      /(?:Check[\s\-]?in|Arrival|From)\s*[:\-]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
+      /(?:Check[\s\-]?in|Arrival|From)\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
     ];
     let checkIn = null;
     for (const p of checkInPatterns) {
@@ -324,9 +372,11 @@ function parseOTAEmail(messageData) {
       if (m) { const d = new Date(m[1]); if (!isNaN(d)) { checkIn = d.toISOString().slice(0, 10); break; } }
     }
 
+    // Check-out date
     const checkOutPatterns = [
-      /Check[\s\-]out[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Departure[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /(?:Check[\s\-]?out|Departure|To|Until)\s*[:\-]?\s*(\d{4}[\-\/]\d{2}[\-\/]\d{2})/i,
+      /(?:Check[\s\-]?out|Departure|To|Until)\s*[:\-]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
+      /(?:Check[\s\-]?out|Departure|To|Until)\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
     ];
     let checkOut = null;
     for (const p of checkOutPatterns) {
@@ -334,23 +384,43 @@ function parseOTAEmail(messageData) {
       if (m) { const d = new Date(m[1]); if (!isNaN(d)) { checkOut = d.toISOString().slice(0, 10); break; } }
     }
 
+    // Guest email — exclude OTA noreply addresses
     const emailMatches = [...body.matchAll(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g)]
       .map(m => m[1])
-      .filter(e => !e.includes("airbnb") && !e.includes("booking") && !e.includes("expedia") && !e.includes("noreply"));
+      .filter(e =>
+        !e.includes("airbnb") && !e.includes("booking") &&
+        !e.includes("expedia") && !e.includes("noreply") &&
+        !e.includes("vrbo") && !e.includes("tripadvisor")
+      );
     const guestEmail = emailMatches[0] || null;
+
+    // Confirmation / reservation number
+    const confirmPatterns = [
+      /(?:Confirmation|Reservation|Booking)\s*(?:number|#|code|ID|No\.?)[:\s]+([A-Z0-9]{4,20})/i,
+      /(?:Ref|Reference)[:\s#]+([A-Z0-9]{4,20})/i,
+      /(?:Order|Itinerary)\s*#?[:\s]+([A-Z0-9]{4,20})/i,
+    ];
+    let confirmationNumber = null;
+    for (const p of confirmPatterns) {
+      const m = body.match(p);
+      if (m) { confirmationNumber = m[1]; break; }
+    }
 
     if (!guestName && !checkIn) return null;
 
     return {
-      guest_name:  guestName || `Guest (${source})`,
-      guest_email: guestEmail,
-      check_in:    checkIn,
-      check_out:   checkOut,
+      guest_name:          guestName || `Guest (${source})`,
+      guest_email:         guestEmail,
+      check_in:            checkIn,
+      check_out:           checkOut,
       source,
       subject,
-      raw_preview: body.substring(0, 300),
+      confirmation_number: confirmationNumber,
+      email_date:          date,
+      raw_preview:         body.substring(0, 400),
     };
-  } catch {
+  } catch (e) {
+    console.error("[parseOTAEmail]", e.message);
     return null;
   }
 }

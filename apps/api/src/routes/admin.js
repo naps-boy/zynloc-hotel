@@ -102,6 +102,15 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
 }));
 
 
+// ─── GET /api/admin/check-google-config (TEMP — remove after verifying) ──────
+adminRouter.get("/check-google-config", (_req, res) => {
+  res.json({
+    client_id_set:     !!process.env.GOOGLE_CLIENT_ID     && process.env.GOOGLE_CLIENT_ID     !== "PLACEHOLDER_REPLACE_WITH_REAL",
+    client_secret_set: !!process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_CLIENT_SECRET !== "PLACEHOLDER_REPLACE_WITH_REAL",
+    redirect_uri:      process.env.GOOGLE_REDIRECT_URI    || "not set",
+  });
+});
+
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
 adminRouter.get("/guests", asyncHandler(async (_req, res) => {
   const { rows } = await query(`

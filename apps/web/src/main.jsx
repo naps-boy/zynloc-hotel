@@ -4096,11 +4096,12 @@ function NavEditor({ api, show }) {
 
 // ── GmailIntegrationCard ──────────────────────────────────────────────────────
 function GmailIntegrationCard({ api, show }) {
-  const [status,      setStatus]      = useState(null);   // null=loading
-  const [scanning,    setScanning]    = useState(false);
-  const [scanResults, setScanResults] = useState(null);
-  const [importing,   setImporting]   = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
+  const [status,           setStatus]           = useState(null);   // null=loading
+  const [scanning,         setScanning]         = useState(false);
+  const [scanResults,      setScanResults]      = useState(null);
+  const [importing,        setImporting]        = useState(false);
+  const [disconnecting,    setDisconnecting]    = useState(false);
+  const [selectedBookings, setSelectedBookings] = useState([]);     // indices of selected bookings
 
   useEffect(() => {
     api.request("/api/gmail/status")
@@ -4112,7 +4113,6 @@ function GmailIntegrationCard({ api, show }) {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("gmail_connected") === "true") {
-      // Re-fetch status to confirm connection, then clean URL
       api.request("/api/gmail/status").then(setStatus).catch(() => {});
       window.history.replaceState({}, "", window.location.hash || "/");
       show("Gmail connected successfully!", "success");
@@ -4139,6 +4139,7 @@ function GmailIntegrationCard({ api, show }) {
       await api.request("/api/gmail/disconnect", { method: "DELETE" });
       setStatus({ connected: false });
       setScanResults(null);
+      setSelectedBookings([]);
       show("Gmail disconnected", "success");
     } catch (err) { show(err.message, "error"); }
     finally { setDisconnecting(false); }
@@ -4147,15 +4148,27 @@ function GmailIntegrationCard({ api, show }) {
   async function handleScan() {
     setScanning(true);
     setScanResults(null);
+    setSelectedBookings([]);
     try {
       const result = await api.request("/api/gmail/scan", { method: "POST" });
       setScanResults(result);
-      if (result.found === 0) show("No new booking emails found in the last 30 days.", "info");
+      // Pre-select all found bookings
+      if (result.found > 0) setSelectedBookings(result.bookings.map((_, i) => i));
+      else show("No new booking emails found in the last 30 days.", "info");
+      // Refresh status to update last_scan_at
+      api.request("/api/gmail/status").then(setStatus).catch(() => {});
     } catch (err) { show(err.message, "error"); }
     finally { setScanning(false); }
   }
 
+  function toggleBooking(index) {
+    setSelectedBookings(prev =>
+      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
+    );
+  }
+
   async function handleConfirmImport(bookings) {
+    if (!bookings.length) return;
     setImporting(true);
     try {
       const result = await api.request("/api/gmail/confirm-import", {
@@ -4164,8 +4177,23 @@ function GmailIntegrationCard({ api, show }) {
       });
       show(`${result.created} booking${result.created !== 1 ? "s" : ""} created successfully`, "success");
       setScanResults(null);
+      setSelectedBookings([]);
+      // Refresh imported count
+      api.request("/api/gmail/status").then(setStatus).catch(() => {});
     } catch (err) { show(err.message, "error"); }
     finally { setImporting(false); }
+  }
+
+  // Relative time helper
+  function relativeTime(iso) {
+    if (!iso) return null;
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins  = Math.floor(diff / 60000);
+    if (mins < 1)   return "just now";
+    if (mins < 60)  return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs  < 24)  return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
   }
 
   // Loading
@@ -4204,10 +4232,25 @@ function GmailIntegrationCard({ api, show }) {
         </div>
       </div>
 
-      {/* Feature chips */}
+      {/* Connected metadata — last scan + imported count */}
+      {status.connected && (
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--muted)" }}>
+          {status.last_scan_at && (
+            <span>🕐 Last scanned: <strong>{relativeTime(status.last_scan_at)}</strong></span>
+          )}
+          {status.imported_count > 0 && (
+            <span>📥 {status.imported_count} booking{status.imported_count !== 1 ? "s" : ""} imported via Gmail</span>
+          )}
+          {!status.last_scan_at && (
+            <span style={{ fontStyle: "italic" }}>Not yet scanned — click Scan to fetch new bookings</span>
+          )}
+        </div>
+      )}
+
+      {/* Feature chips (disconnected state) */}
       {!status.connected && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12, color: "var(--muted)" }}>
-          {["Airbnb","Booking.com","Expedia","VRBO"].map(p => (
+          {["Airbnb","Booking.com","Expedia","VRBO","TripAdvisor","Hotels.com"].map(p => (
             <span key={p} style={{ background: "var(--bg)", padding: "3px 8px",
                                    borderRadius: 4, border: "1px solid var(--border)" }}>
               📧 {p}
@@ -4232,7 +4275,7 @@ function GmailIntegrationCard({ api, show }) {
         </div>
       )}
 
-      {/* Scan results */}
+      {/* Scan results — selectable booking cards */}
       {scanResults && (
         <div className="stack" style={{ gap: 10 }}>
           <div style={{ fontWeight: 600, fontSize: 14 }}>
@@ -4242,33 +4285,73 @@ function GmailIntegrationCard({ api, show }) {
           </div>
 
           {scanResults.bookings.map((b, i) => (
-            <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 8,
-                                  padding: "12px 14px", display: "flex", flexDirection: "column", gap: 4 }}>
+            <div
+              key={i}
+              onClick={() => toggleBooking(i)}
+              style={{
+                border: selectedBookings.includes(i) ? "1px solid var(--gold, #f59e0b)" : "1px solid var(--border)",
+                borderRadius: 8, padding: "12px 14px",
+                display: "flex", flexDirection: "column", gap: 4,
+                cursor: "pointer",
+                background: selectedBookings.includes(i) ? "rgba(245,158,11,0.04)" : "transparent",
+                transition: "border-color 0.15s, background 0.15s",
+              }}
+            >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <strong style={{ fontSize: 14 }}>{b.guest_name}</strong>
+                <input
+                  type="checkbox"
+                  checked={selectedBookings.includes(i)}
+                  onChange={() => {}}
+                  style={{ flexShrink: 0 }}
+                />
+                <strong style={{ fontSize: 14, flex: 1 }}>{b.guest_name}</strong>
                 <SourceBadge source={b.source} />
               </div>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", paddingLeft: 20 }}>
                 {b.check_in && b.check_out
                   ? `${b.check_in} → ${b.check_out}`
-                  : b.check_in || "Dates not parsed"}
-                {b.guest_email && <span style={{ marginLeft: 10 }}>{b.guest_email}</span>}
+                  : b.check_in || "Dates not found"}
+                {b.confirmation_number && (
+                  <span style={{ marginLeft: 10, fontWeight: 500 }}>Ref: {b.confirmation_number}</span>
+                )}
+                {b.guest_email && <span style={{ marginLeft: 10, opacity: 0.7 }}>{b.guest_email}</span>}
               </div>
               {b.subject && (
-                <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>
-                  {b.subject.slice(0, 80)}
+                <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic", paddingLeft: 20 }}>
+                  {b.subject.slice(0, 90)}
                 </div>
               )}
             </div>
           ))}
 
           {scanResults.found > 0 && (
-            <button className="primary" onClick={() => handleConfirmImport(scanResults.bookings)}
-                    disabled={importing}>
-              {importing
-                ? "Creating bookings…"
-                : `Import All ${scanResults.found} Booking${scanResults.found !== 1 ? "s" : ""}`}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="ghost"
+                onClick={() => setSelectedBookings(
+                  selectedBookings.length === scanResults.bookings.length
+                    ? []
+                    : scanResults.bookings.map((_, i) => i)
+                )}
+                style={{ fontSize: 12 }}
+              >
+                {selectedBookings.length === scanResults.bookings.length ? "Deselect All" : "Select All"}
+              </button>
+              <button
+                className="primary"
+                onClick={() => handleConfirmImport(
+                  scanResults.bookings.filter((_, i) => selectedBookings.includes(i))
+                )}
+                disabled={importing || selectedBookings.length === 0}
+                style={{ flex: 1 }}
+              >
+                {importing
+                  ? "Creating bookings…"
+                  : selectedBookings.length === 0
+                    ? "Select bookings to import"
+                    : `Import ${selectedBookings.length} Selected`}
+              </button>
+            </div>
           )}
         </div>
       )}
