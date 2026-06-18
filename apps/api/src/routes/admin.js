@@ -104,12 +104,160 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
 
 // ─── GET /api/admin/export-table/:name (TEMP — migration use only) ───────────
 adminRouter.get("/export-table/:name", asyncHandler(async (req, res) => {
-  const table = req.params.name.replace(/[^a-z_]/g, ""); // sanitise
+  const table = req.params.name.replace(/[^a-z_]/g, "");
   try {
     const { rows } = await query(`SELECT * FROM "${table}"`);
     res.json({ table, count: rows.length, rows });
   } catch (err) {
     res.json({ table, count: 0, rows: [], error: err.message });
+  }
+}));
+
+// ─── POST /api/admin/migrate-to-supabase (TEMP — remove after migration) ─────
+// Runs from inside Render (which has proper Supabase connectivity).
+// Body: { supabaseUrl: "postgresql://..." }
+// Steps: 1) connect to Supabase  2) run all migrations  3) import data  4) verify
+adminRouter.post("/migrate-to-supabase", asyncHandler(async (req, res) => {
+  const { supabaseUrl } = req.body;
+  if (!supabaseUrl) return res.status(400).json({ error: "supabaseUrl required in body" });
+
+  const { createRequire } = await import("module");
+  const require = createRequire(import.meta.url);
+  const { Pool: PgPool } = require("pg");
+  const fs = await import("fs/promises");
+  const path = await import("path");
+  const { fileURLToPath } = await import("url");
+
+  const log = [];
+  const step = (msg) => { log.push(msg); console.log("[migrate]", msg); };
+
+  // ── 1. Connect to Supabase ───────────────────────────────────────────────
+  const sbPool = new PgPool({
+    connectionString: supabaseUrl,
+    ssl: { rejectUnauthorized: false },
+    max: 3,
+    connectionTimeoutMillis: 20000,
+  });
+
+  try {
+    await sbPool.query("SELECT 1");
+    step("✓ Connected to Supabase");
+  } catch (err) {
+    return res.status(500).json({ error: "Cannot connect to Supabase: " + err.message, log });
+  }
+
+  // ── 2. Run all migrations ────────────────────────────────────────────────
+  try {
+    await sbPool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
+    const applied = new Set(
+      (await sbPool.query("SELECT id FROM schema_migrations")).rows.map(r => r.id)
+    );
+
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const migrDir = path.join(__dirname, "../db/migrations");
+    const files = (await fs.readdir(migrDir)).filter(f => f.endsWith(".sql")).sort();
+
+    for (const file of files) {
+      if (applied.has(file)) { step(`  skip ${file} (already applied)`); continue; }
+      const sql = await fs.readFile(path.join(migrDir, file), "utf8");
+      const client = await sbPool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(sql);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT DO NOTHING", [file]);
+        await client.query("COMMIT");
+        step(`  ✓ Applied ${file}`);
+      } catch (err) {
+        await client.query("ROLLBACK");
+        step(`  ✗ ${file} failed: ${err.message.slice(0, 120)}`);
+        // Continue — some migrations may conflict on partially-set-up schema
+      } finally {
+        client.release();
+      }
+    }
+    step("✓ Migrations complete");
+  } catch (err) {
+    return res.status(500).json({ error: "Migration failed: " + err.message, log });
+  }
+
+  // ── 3. Import data ────────────────────────────────────────────────────────
+  const TABLE_ORDER = [
+    "hotels","staff","rooms","guests","bookings",
+    "packages","facilities","package_facilities","facility_access",
+    "qr_codes","qr_scans","tasks","messages",
+    "notifications","service_requests","alerts","settings",
+    "guest_documents","access_activity_log","email_integrations",
+    "access_providers","room_devices","access_credentials",
+  ];
+
+  try {
+    const __dirname2 = path.dirname(fileURLToPath(import.meta.url));
+    const dataFile = path.join(__dirname2, "../db/migration_data.json");
+    const exportData = JSON.parse(await fs.readFile(dataFile, "utf8"));
+
+    const inserted = {};
+    const skipped = {};
+
+    for (const table of TABLE_ORDER) {
+      const rows = exportData.tables[table];
+      if (!rows || rows.length === 0) { skipped[table] = 0; continue; }
+
+      // Check if table exists in Supabase
+      const { rows: exists } = await sbPool.query(
+        "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=$1",
+        [table]
+      );
+      if (!exists.length) { skipped[table] = `table not found`; continue; }
+
+      // Check existing row count
+      const { rows: countRows } = await sbPool.query(`SELECT COUNT(*)::int AS c FROM "${table}"`);
+      if (countRows[0].c > 0) {
+        skipped[table] = `${countRows[0].c} rows already present`;
+        step(`  ↩ ${table}: ${countRows[0].c} rows already exist — skipping`);
+        continue;
+      }
+
+      const cols = Object.keys(rows[0]);
+      const colList = cols.map(c => `"${c}"`).join(", ");
+      let count = 0;
+      const BATCH = 50;
+
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH);
+        const values = [];
+        const placeholders = batch.map((row, bi) =>
+          "(" + cols.map((col, ci) => { values.push(row[col]); return `$${bi * cols.length + ci + 1}`; }).join(", ") + ")"
+        ).join(", ");
+        await sbPool.query(
+          `INSERT INTO "${table}" (${colList}) VALUES ${placeholders} ON CONFLICT DO NOTHING`,
+          values
+        );
+        count += batch.length;
+      }
+      inserted[table] = count;
+      step(`  ✓ ${table}: ${count} rows inserted`);
+    }
+    step("✓ Data import complete");
+
+    // ── 4. Verify counts ───────────────────────────────────────────────────
+    const verify = {};
+    for (const table of ["hotels","staff","rooms","guests","bookings","packages","facilities","messages"]) {
+      try {
+        const { rows: [{ c }] } = await sbPool.query(`SELECT COUNT(*)::int AS c FROM "${table}"`);
+        verify[table] = c;
+      } catch { verify[table] = "error"; }
+    }
+
+    await sbPool.end();
+    step("✓ Migration complete");
+
+    res.json({ ok: true, log, inserted, skipped, verify });
+  } catch (err) {
+    await sbPool.end().catch(() => {});
+    res.status(500).json({ error: "Import failed: " + err.message, log });
   }
 }));
 
