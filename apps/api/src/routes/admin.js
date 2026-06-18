@@ -102,29 +102,15 @@ adminRouter.get("/activity", asyncHandler(async (_req, res) => {
 }));
 
 
-// ─── GET /api/admin/export-all (TEMP — migration use only, remove after) ─────
-// Dumps every table as JSON so we can migrate from Render to Supabase.
-// Protected by x-admin-key. Returns { exported_at, tables: { tableName: rows[] } }
-adminRouter.get("/export-all", asyncHandler(async (_req, res) => {
-  const tables = [
-    "hotels", "staff", "rooms", "guests", "bookings",
-    "packages", "facilities", "package_facilities", "facility_access",
-    "qr_codes", "qr_scans", "tasks", "checkin_qr_codes",
-    "navigation_paths", "promo_codes", "messages", "notifications",
-    "service_requests", "alerts", "settings",
-    "guest_documents", "access_activity_log", "email_integrations",
-    "access_providers", "room_devices", "access_credentials",
-  ];
-  const result = { exported_at: new Date().toISOString(), tables: {} };
-  for (const t of tables) {
-    try {
-      const { rows } = await query(`SELECT * FROM "${t}"`);
-      result.tables[t] = rows;
-    } catch {
-      result.tables[t] = [];
-    }
+// ─── GET /api/admin/export-table/:name (TEMP — migration use only) ───────────
+adminRouter.get("/export-table/:name", asyncHandler(async (req, res) => {
+  const table = req.params.name.replace(/[^a-z_]/g, ""); // sanitise
+  try {
+    const { rows } = await query(`SELECT * FROM "${table}"`);
+    res.json({ table, count: rows.length, rows });
+  } catch (err) {
+    res.json({ table, count: 0, rows: [], error: err.message });
   }
-  res.json(result);
 }));
 
 // ─── GET /api/admin/guests — recent 50 guests across all hotels ───────────────
