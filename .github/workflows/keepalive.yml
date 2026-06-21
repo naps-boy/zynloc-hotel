@@ -18,9 +18,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Hit DB-touching endpoint
+        env:
+          ADMIN_KEY: ${{ secrets.ZYNLOC_ADMIN_KEY }}
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "x-admin-key: ZynlocAdmin2026!" \
+            -H "x-admin-key: ${ADMIN_KEY}" \
             https://zynloc-hotel-api.onrender.com/api/admin/overview)
           echo "Response: $STATUS"
           if [ "$STATUS" != "200" ]; then
