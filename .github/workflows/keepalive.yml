@@ -1,0 +1,30 @@
+name: Supabase keep-alive
+
+# Supabase free tier pauses a project after 7 days of database inactivity.
+# This workflow hits a DB-touching endpoint every 5 days to prevent that.
+# The admin/overview endpoint runs a live query against Supabase — a static
+# health check would not reset the inactivity timer.
+
+on:
+  schedule:
+    # Every 5 days at 10:00 UTC (day-of-month 1, 6, 11, 16, 21, 26)
+    - cron: "0 10 1,6,11,16,21,26 * *"
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  ping:
+    name: Ping Supabase via API
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit DB-touching endpoint
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "x-admin-key: ZynlocAdmin2026!" \
+            https://zynloc-hotel-api.onrender.com/api/admin/overview)
+          echo "Response: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "ERROR: Expected 200, got $STATUS"
+            exit 1
+          fi
+          echo "Keep-alive ping succeeded."
